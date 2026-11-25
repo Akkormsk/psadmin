@@ -6,7 +6,7 @@ import tempfile
 
 from .documents import DocumentError, MAX_BYTES
 
-OFFICE_EXTENSIONS = {"doc", "docx", "xls", "xlsx"}
+OFFICE_EXTENSIONS = {"doc", "docx", "xls", "xlsx", "odt"}
 
 
 def convert_office(data: bytes, filename: str, target: str) -> bytes:

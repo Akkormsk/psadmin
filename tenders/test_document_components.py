@@ -272,13 +272,18 @@ class IntakeProposalHistoryTests(TestCase):
         from tender_selection.services import _save_intake_proposals
         tender = Tender.objects.create(purchase_number="history-refresh", title="History")
         job = TenderComputeJob.objects.create(tender=tender)
-        old = TenderSourceItem.objects.create(tender=tender, source_key="old", source_type="document_proposal", is_active=False)
+        old_requirements = {'characteristics': [{'name': 'Материал', 'value': 'Бумага'}]}
+        old = TenderSourceItem.objects.create(tender=tender, source_key="old", source_type="document_proposal",
+            is_active=False, requirements=old_requirements)
         line = TenderComputeLine.objects.create(job=job, source_item=old)
         new = TenderSourceItem.objects.create(tender=tender, source_key="new", source_type="document_proposal", is_active=False)
         _save_intake_proposals(job, {"created": [new]}, incomplete=True)
         old.refresh_from_db()
         line.refresh_from_db()
-        self.assertEqual(old.source_type, "document_superseded")
+        self.assertEqual(old.source_type, "document_proposal")
+        self.assertFalse(old.is_active)
+        self.assertEqual(old.requirements, old_requirements)
         self.assertEqual(line.source_item_id, old.pk)
-        self.assertEqual(old.metadata["superseded_by_job_id"], job.pk)
-        self.assertEqual(list(tender.v2_source_items.filter(source_type="document_proposal").values_list("pk", flat=True)), [new.pk])
+        self.assertFalse(tender.v2_source_items.filter(source_type="document_proposal", is_active=True).exists())
+        self.assertEqual(list(tender.v2_source_items.filter(source_type="document_proposal")
+                              .values_list("pk", flat=True)), [old.pk, new.pk])

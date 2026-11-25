@@ -123,8 +123,19 @@ class InputDependenciesSmokeTests(TestCase):
         saved_inputs = deepcopy(line.input_snapshot)
         self.parents[0].requirements = {'characteristics': [{'name': 'Материал', 'value': 'металл'}]}
         self.parents[0].save(update_fields=['requirements'])
-        with self.assertRaisesRegex(ValueError, 'прежним требованиям'):
-            route_tender_batch(line.job, self.router)
+        job = line.job
+        decisions = route_tender_batch(job, self.router)
         line.refresh_from_db()
+        self.old_plan.refresh_from_db()
+        self.estimate.refresh_from_db()
+        self.assertNotIn(self.old_plan.component_id, {decision.component_id for decision in decisions})
         self.assertEqual(line.input_snapshot, saved_inputs)
         self.assertEqual(line.result, {'cost': '500'})
+        self.assertEqual(line.status, 'ready')
+        self.assertEqual(self.old_plan.status, 'stale')
+        self.assertEqual(self.old_plan.steps.get().pk, self.old_step.pk)
+        self.assertEqual(ComponentRoutePlan.objects.filter(component=self.old_plan.component).count(), 1)
+        self.assertEqual(source_route_snapshots(self.tender)[self.parents[0].pk]['state'], 'stale')
+        self.assertEqual(estimate_input_status(self.estimate)['state'], 'stale')
+        self.assertTrue(any('прежним требованиям' in gap.get('reason', '')
+                            for gap in job.diagnostics.get('analysis_gaps', [])))

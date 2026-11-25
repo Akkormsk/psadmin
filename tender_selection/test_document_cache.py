@@ -8,6 +8,7 @@ from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from django.utils import timezone
+from docx import Document
 
 from . import documents, services
 from .models import DocumentPreview, Tender, TenderDocument
@@ -30,6 +31,14 @@ def _notification(prefix=""):
 
 def _sufficient():
     return {"data": {"risk_facts": {"documents_sufficient": "true", "execution_days": 90}, "legal_risks": "по контракту"}}
+
+
+def _odt_container():
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, 'w') as archive:
+        archive.writestr('mimetype', 'application/vnd.oasis.opendocument.text')
+        archive.writestr('content.xml', '<office:document-content/>')
+    return data.getvalue()
 
 
 class DocumentHtmlTests(TestCase):
@@ -306,3 +315,35 @@ class ImageAttachmentTests(TestCase):
         result = documents.extract_preview(data.getvalue(), 'scan.tiff')
         self.assertNotIn('error', result)
         self.assertEqual(result['html'].count('data:image/jpeg;base64,'), 2)
+
+
+class OpenDocumentPreviewTests(TestCase):
+    def test_eis_odt_zip_name_is_read_as_odt_package(self):
+        with patch("tender_selection.office.convert_office", return_value=b"docx"), \
+                patch.object(documents, "_docx_html", return_value="<p>Требования</p>"):
+            result = documents.extract_preview(
+                _odt_container(), "Описание объекта закупки.odt.zip", read_archive=True,
+            )
+
+        self.assertEqual(result, {"kind": "odt", "html": "<p>Требования</p>"})
+
+    def test_odt_uses_office_conversion_instead_of_archive_reader(self):
+        document = Document()
+        document.add_heading('Техническое задание', level=1)
+        document.add_table(rows=2, cols=2).cell(1, 1).text = '100 мм'
+        converted = io.BytesIO()
+        document.save(converted)
+        odt = _odt_container()
+        with patch('tender_selection.office.convert_office', return_value=converted.getvalue()) as convert:
+            result = documents.extract_preview(odt, 'Приложение к ООЗ.odt', read_archive=True)
+        convert.assert_called_once_with(odt, 'Приложение к ООЗ.odt', 'docx')
+        self.assertEqual(result['kind'], 'odt')
+        self.assertIn('Техническое задание', result['html'])
+        self.assertIn('100 мм', result['html'])
+        self.assertNotIn('content.xml', result['html'])
+
+    def test_odt_conversion_error_is_explicit(self):
+        with patch('tender_selection.office.convert_office', side_effect=documents.DocumentError('conversion failed')):
+            result = documents.extract_preview(_odt_container(), 'spec.odt', read_archive=True)
+        self.assertEqual(result['kind'], 'odt')
+        self.assertIn('conversion failed', result['error'])

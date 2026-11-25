@@ -109,6 +109,26 @@ def audit():
     docs.update(unique_referenced_urls=len(referenced), missing_preview_urls=len(referenced - set(previews)),
                 unreferenced_preview_urls=len(set(previews) - referenced), cached_error_urls=len(errors & referenced))
     emit('documents', dict(docs))
+    preview_formats, preview_errors, preview_warnings = Counter(), Counter(), Counter()
+    for row in DocumentPreview.objects.values('kind', 'parser_version', 'error', 'html').iterator():
+        kind = row['kind'] or 'unknown'
+        preview_formats[kind] += 1
+        error = (row['error'] or '').casefold()
+        if error:
+            if 'формат не поддерживается' in error or 'unsupported' in error:
+                preview_errors['unsupported-format'] += 1
+            elif any(value in error for value in ('недоступ', 'http', 'ссылка', 'скач', 'timeout', 'время ожидания')):
+                preview_errors['external-unavailable'] += 1
+            elif 'преобраз' in error:
+                preview_errors['conversion'] += 1
+            else:
+                preview_errors['extraction'] += 1
+        html = row['html'] or ''
+        preview_warnings['truncated'] += 'data-document-warning="truncated"' in html
+        preview_warnings['unreadable-page'] += 'data-document-warning="unreadable-page"' in html
+    emit('document_preview_formats', dict(preview_formats))
+    emit('document_preview_error_types', dict(preview_errors))
+    emit('document_preview_warning_types', dict(preview_warnings))
     readings, latest, latest_seen = Counter(), Counter(), set()
     for job in TenderComputeJob.objects.order_by('-pk').values('pk', 'tender_id', 'status', 'diagnostics').iterator():
         if job['tender_id'] not in latest_seen:
