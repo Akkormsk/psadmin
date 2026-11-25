@@ -15,6 +15,7 @@
             {% if item.components %}<ul class="ts-components">{% for component in item.components %}<li>{{ component.name }} <span>×{{ component.quantity_per_parent|floatformat:"-4" }}{% if component.unit %} {{ component.unit }}{% endif %}</span></li>{% endfor %}</ul>{% endif %}
             <div class="ts-item-tools">{% include "tender_selection/_tz.html" with rows=item.tz_rows %}
 </div>
+    {% include "tender_selection/_product_proposals.html" with proposal_groups=item.document_proposal_groups %}
     <section class="ts-product-calculation" data-product-calculation data-source-id="{{ item.source_id }}" data-route-state="{{ item.production_route.state }}">
       <h4>Маршрут и расчёт</h4>
       <div data-product-calculation-body>
