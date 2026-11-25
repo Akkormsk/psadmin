@@ -1,9 +1,39 @@
 {% load tender_selection_extras %}
 <div data-analysis-result="{{ tender.pk }}" data-analysis-revision="{{ analysis_status.revision }}">
     {% if product_calculation %}{{ product_calculation|json_script:"ts-product-calculation-data" }}{% endif %}
+    <div id="tender-items"></div>
+    {% if document_proposal_groups %}
+    <section class="ts-document-proposals">
+      <h3>Правки ТЗ</h3>
+      <p class="ts-sub" role="status">Предложений: {{ document_proposal_ids|length }} · {% if analysis_status.processing or document_review_needs_refresh or document_proposals_incomplete or analysis_status.code == "ANALYSIS_INCOMPLETE" %}Приёмка недоступна{% else %}Готовы к приёмке{% endif %}</p>
+      {% if analysis_status.code == "ANALYSIS_INCOMPLETE" %}<p class="ts-sub">Показаны предложения предыдущего разбора. Новый разбор не завершён.</p>{% endif %}
+      {% if analysis_status.processing %}
+      <p class="ts-sub">Дождитесь окончания сверки ТЗ.</p>
+      {% elif document_proposals_incomplete or analysis_status.code == "ANALYSIS_INCOMPLETE" %}
+      <p class="ts-warn">Сверка ТЗ не завершена. Проверьте причину ошибки и повторите «Обновить».</p>
+      {% elif document_review_needs_refresh %}
+      <p class="ts-warn">Не удалось сопоставить предложения с принятыми товарами. Нажмите «Обновить» для повторной сверки.</p>
+      {% if request.user.is_superuser %}
+      <form class="ts-document-proposal__actions" data-document-review-actions method="post" action="{% url 'tender_selection:all_document_proposals_action' tender.pk %}{% if request.GET.workspace %}?workspace=1{% endif %}">{% csrf_token %}<input type="hidden" name="proposal_ids" value="{{ document_proposal_ids|join:',' }}"><button class="button-secondary" name="action" value="reject">Отклонить все</button></form>
+      {% endif %}
+      {% elif request.user.is_superuser %}
+      <form class="ts-document-proposal__actions" data-document-review-actions method="post" action="{% url 'tender_selection:all_document_proposals_action' tender.pk %}{% if request.GET.workspace %}?workspace=1{% endif %}">{% csrf_token %}<input type="hidden" name="proposal_ids" value="{{ document_proposal_ids|join:',' }}"><button class="button-success" name="action" value="accept">Принять все правки</button><button class="button-secondary" name="action" value="reject">Отклонить все</button></form>
+      {% endif %}
+      <details class="ts-review-facts"><summary>Посмотреть правки по товарам</summary>
+      {% for proposal_group in document_proposal_groups %}
+      <section class="ts-document-proposal ts-review-changes" aria-label="{{ proposal_group.display_name }}">
+        <div class="ts-group-head"><strong>{{ proposal_group.display_name }}</strong>{% if proposal_group.is_kit %}<span class="ts-sub">{{ proposal_group.parent_quantity|floatformat:"-2" }} {{ proposal_group.parent_unit }} · {{ proposal_group.original_values.price|rub_precise }} за набор · {{ proposal_group.original_values.sum|rub_precise }} всего</span>{% endif %}</div>
+        {% for proposal in proposal_group.items %}
+          {% include "tender_selection/_document_proposal.html" %}
+        {% endfor %}
+      </section>
+      {% endfor %}
+      </details>
+    </section>
+    {% endif %}
     {% if display_items %}
     {% if v2_questions %}<div class="ts-question-indicator"><a href="#owner-question-{{ v2_questions.0.pk }}">Нужно уточнить · {{ v2_questions|length }}</a></div>{% endif %}
-    <h3 class="settings-subtitle" id="tender-items">Перечень товаров ({{ display_item_count }})</h3>
+    <h3 class="settings-subtitle">Перечень товаров ({{ display_item_count }})</h3>
     {% if document_item_count %}<div class="ts-derived-note">В извещении: {{ card.items|length }} позиц. · Сейчас: {{ display_item_count }} товаров и групп · <details class="ts-original-toggle"><summary>Показать исходную запись</summary><span>{{ original_source_texts|join:"; " }}</span></details></div>{% endif %}
     <div class="ts-products-workspace" data-products-workspace>
       <div class="ts-products-list" data-products-list aria-label="Список товаров">
@@ -20,6 +50,7 @@
               {% include "tender_selection/_product_financials.html" with finance=group.finance finance_key=group.finance_key finance_view="detail" %}
               {% include "tender_selection/_1875.html" with regime=group.national_regime %}
               <p class="ts-sub">Цена группы не распределялась между составляющими.</p>
+              {% include "tender_selection/_product_proposals.html" with proposal_groups=group.document_proposal_groups %}
               <h4>Состав</h4>
               {% for item in group.items %}<button type="button" class="ts-product-component" data-product-target="{% if item.source_id %}source-{{ item.source_id }}{% else %}group-{{ group.key }}-{{ forloop.counter0 }}{% endif %}">{{ item.name }} · {{ item.quantity|floatformat:"-2"|default:"—" }} {{ item.unit }} ›</button>{% endfor %}
               {% include "tender_selection/_product_financials.html" with finance=group.finance finance_key=group.finance_key finance_view="footer" %}
@@ -38,43 +69,5 @@
     <p class="ts-finance-explanation">* Прибыль до НДС и общих расходов. НМЦК, РРЦ и прибыль набора не распределяются между составляющими.</p>
     {% endif %}
     {% if display_source_financials %}<section class="ts-derived-note"><strong>Стоимость исходных позиций по извещению</strong><p>Указаны исходные количества и суммы. Стоимость изменённого состава рассчитывается отдельно.</p><div class="table-wrapper"><table class="table"><thead><tr><th>Позиция</th><th>Количество</th><th>Цена</th><th>Сумма</th></tr></thead><tbody>{% for source in display_source_financials %}<tr><td>{{ source.name }}</td><td>{{ source.quantity|floatformat:"-2" }} {{ source.unit }}</td><td>{% if source.price is not None %}{{ source.price|rub_precise }}{% else %}—{% endif %}</td><td>{% if source.sum is not None %}{{ source.sum|rub_precise }}{% else %}—{% endif %}</td></tr>{% endfor %}</tbody></table></div></section>{% endif %}
-    {% if document_proposal_groups %}
-    <section class="ts-document-proposals">
-      <h3>{% if analysis_status.processing or document_proposals_incomplete or analysis_status.code == "ANALYSIS_INCOMPLETE" %}Предварительные изменения ТЗ{% else %}Изменения на согласование{% endif %}</h3>
-      {% if analysis_status.code == "ANALYSIS_INCOMPLETE" %}<p class="ts-sub">Ниже — предложения предыдущего разбора. Новый разбор не завершён.</p>{% endif %}
-      {% for group in document_proposal_groups %}
-      <div class="ts-document-proposal ts-review-changes">
-        {% if group.is_kit %}<div class="ts-group-head"><strong>{{ group.display_name }}</strong><span class="ts-sub">{{ group.parent_quantity|floatformat:"-2" }} {{ group.parent_unit }} · {{ group.original_values.price|rub_precise }} за набор · {{ group.original_values.sum|rub_precise }} всего</span></div>{% endif %}
-        {% for proposal in group.items %}
-        <article class="ts-review-item">
-          <strong{% if proposal.name_changed %} class="ts-fact-added"{% endif %}>{{ proposal.name }}</strong>
-          {% if proposal.relationship == "component" %}<span class="ts-sub"> · товар в составе {{ group.display_name }}</span>
-          {% elif proposal.structural_change %}<p>{% if proposal.supply_kind == "unclear" %}Нужно проверить состав: {{ proposal.structure_reason }}{% else %}Объединить прежние составляющие в один товар.{% endif %}</p>{% endif %}
-          <span class="ts-review-value{% if proposal.quantity_changed %} ts-fact-added{% endif %}">{{ proposal.quantity|floatformat:"-2" }}</span> <span class="ts-review-value{% if proposal.unit_changed %} ts-fact-added{% endif %}">{{ proposal.unit }}</span>
-          {% if proposal.national_change %}<p class="ts-sub">Уточнён нацрежим товара:</p>{% include "tender_selection/_1875.html" with regime=proposal.national_change %}{% endif %}
-          {% if proposal.analysis_incomplete %}<p class="ts-sub">Состав определён · ТЗ дополняется…</p>{% endif %}
-          {% if proposal.name_changed %}<p class="ts-sub">Уточнено название.</p>{% endif %}
-          {% if proposal.changed_rows %}<details class="ts-review-facts"{% if proposal.changed_rows|length < 5 and proposal.relationship != "component" %} open{% endif %}><summary>Дополнения и уточнения ТЗ · {{ proposal.changed_rows|length }}</summary><ul class="ts-chars">{% for ch in proposal.changed_rows %}<li>{% include "tender_selection/_characteristic.html" %}</li>{% endfor %}</ul></details>{% endif %}
-          {% if proposal.removed_rows %}<details class="ts-review-facts"><summary>Исключить из ТЗ · {{ proposal.removed_rows|length }}</summary><ul>{% for row in proposal.removed_rows %}<li>{{ row.name }}: {{ row.value }}</li>{% endfor %}</ul></details>{% endif %}
-          {% if proposal.review_error and not document_review_needs_refresh %}<p>{{ proposal.review_error }}</p>{% endif %}
-          {% if proposal.document and not proposal.changed_rows %}<button type="button" class="ts-doc-link ts-review-source" data-doc-preview="{{ proposal.document.index }}" data-doc-name="{{ proposal.document.name }}">Источник · {{ proposal.document.name }}</button>{% endif %}
-        </article>
-        {% endfor %}
-      </div>
-      {% endfor %}
-      {% if request.user.is_superuser %}
-      {% if analysis_status.processing %}
-      <p class="ts-sub" role="status">Сверяем ТЗ. После завершения проверки здесь появятся действия по согласованию.</p>
-      {% elif document_review_needs_refresh %}
-      <p class="ts-warn" role="status">Не удалось сопоставить сохранённые предложения с принятыми товарами. Нажмите «Обновить» для повторной сверки или отклоните эти предложения. Принятые товары и ТЗ сохранены.</p>
-      <form class="ts-document-proposal__actions" data-document-review-actions method="post" action="{% url 'tender_selection:all_document_proposals_action' tender.pk %}{% if request.GET.workspace %}?workspace=1{% endif %}">{% csrf_token %}<input type="hidden" name="proposal_ids" value="{{ document_proposal_ids|join:',' }}"><button class="button-secondary" name="action" value="reject">Отклонить все</button></form>
-      {% elif document_proposals_incomplete or analysis_status.code == "ANALYSIS_INCOMPLETE" %}
-      <p class="ts-warn" role="status">Сверка ТЗ не завершена. Черновик можно посмотреть, но принимать или отклонять его пока нельзя. Проверьте причину ошибки и повторите «Обновить».</p>
-      {% else %}
-      <form class="ts-document-proposal__actions" data-document-review-actions method="post" action="{% url 'tender_selection:all_document_proposals_action' tender.pk %}{% if request.GET.workspace %}?workspace=1{% endif %}">{% csrf_token %}<input type="hidden" name="proposal_ids" value="{{ document_proposal_ids|join:',' }}"><button class="button-success" name="action" value="accept">Принять все правки</button><button class="button-secondary" name="action" value="reject">Отклонить все</button></form>
-      {% endif %}
-      {% endif %}
-    </section>
-    {% endif %}
 
 </div>

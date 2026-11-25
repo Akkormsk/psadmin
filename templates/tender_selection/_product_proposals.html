@@ -1,0 +1,5 @@
+{% if proposal_groups %}<details class="ts-review-facts"><summary>Предложенные изменения ТЗ</summary>
+{% for proposal_group in proposal_groups %}{% for proposal in proposal_group.items %}
+  {% include "tender_selection/_document_proposal.html" %}
+{% endfor %}{% endfor %}
+</details>{% endif %}

@@ -659,7 +659,7 @@ def tender_detail(request, pk):
                 details = [characteristic_display(row, documents=proposal_documents) for row in rows if isinstance(row, dict)]
                 components = [{"name": component.name, "quantity_per_parent": component.quantity_per_parent, "unit": component.unit} for component in commercial.components.filter(status="active").order_by("sort_order", "pk")]
                 changed = commercial.structure != TenderCommercialItem.Structure.SIMPLE or (source and source.source_type in {"document_enrichment", "document_extraction"})
-                display_items.append({"source_id": source.pk if source else None, "commercial_id": commercial.pk, "name": commercial.display_name, "quantity": commercial.quantity, "unit": commercial.unit, "code": notification_item.get("code", ""), "code_name": notification_item.get("code_name", ""), "price": notification_item.get("price") if quote_source else None, "sum": notification_item.get("sum") if quote_source else None,
+                display_items.append({"source_id": source.pk if source else None, "commercial_id": commercial.pk, "proposal_parent_ids": [linked.pk for linked in linked_sources], "name": commercial.display_name, "quantity": commercial.quantity, "unit": commercial.unit, "code": notification_item.get("code", ""), "code_name": notification_item.get("code_name", ""), "price": notification_item.get("price") if quote_source else None, "sum": notification_item.get("sum") if quote_source else None,
                     "characteristics": details, "components": components if commercial.structure == TenderCommercialItem.Structure.COMPOSITE else [],
                     "source_mark": "Уточнено по ТЗ" if changed else "", "source_mark_kind": "enriched", "source_details": "Документация" if changed else "", "source_evidence": "", "source_changes": [], "original_source_text": "",
                     "composition_question": "", "composition_question_id": None, "composition_options": []})
@@ -750,6 +750,8 @@ def tender_detail(request, pk):
             item["completeness"] = [row for row in item.get("characteristics", []) if row.get("scope") == "completeness"]
             item["characteristics"] = [row for row in item.get("characteristics", []) if row.get("scope") != "completeness"]
         item["tz_rows"] = item.get("characteristics", []) + item.get("completeness", [])
+        parent_ids = item.get("proposal_parent_ids", [item.get("source_id")])
+        item["document_proposal_groups"] = [proposals_by_parent[pk] for pk in parent_ids if pk in proposals_by_parent and proposals_by_parent[pk]["parent"]]
         key = item.get("group_key")
         if not key:
             ungrouped_display_items.append(item)
@@ -760,6 +762,8 @@ def tender_detail(request, pk):
             display_item_groups.append(grouped[key])
         grouped[key]["items"].append(item)
     for group in display_item_groups:
+        group_proposals = proposals_by_parent.get(group["key"])
+        group["document_proposal_groups"] = [group_proposals] if group_proposals and group_proposals["parent"] else []
         group["national_regime"] = group["original"].get("national_regime") or annotation()
         group["name_parts"] = characteristic_display({"value": group["name"], "source": "combined", "source_facts": [{"value": group["original"].get("name", ""), "source": "notification"}]})["parts"]
     for group in document_proposal_groups:
