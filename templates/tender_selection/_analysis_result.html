@@ -23,7 +23,6 @@
     {% endif %}
     {% if display_items %}
     {% if v2_questions %}<div class="ts-question-indicator"><a href="#owner-question-{{ v2_questions.0.pk }}">Нужно уточнить · {{ v2_questions|length }}</a></div>{% endif %}
-    {% if document_item_count %}<div class="ts-derived-note">В извещении: {{ card.items|length }} позиц. · Сейчас: {{ display_item_count }} товаров и групп · <details class="ts-original-toggle"><summary>Показать исходную запись</summary><span>{{ original_source_texts|join:"; " }}</span></details></div>{% endif %}
     {% endif %}
     {% include "tender_selection/_product_editor.html" %}
     {% if not product_editor and display_items %}<h3 class="settings-subtitle">Перечень товаров ({{ display_item_count }})</h3>{% endif %}
