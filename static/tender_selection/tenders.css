@@ -468,3 +468,11 @@ body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel { pad
 .ts-product-edit-toolbar [data-product-edit-status]:empty { display:none; }
 .ts-product-edit-toolbar [data-product-edit-status]:not(:empty) { flex-basis:100%; text-align:right; }
 @media(max-width:650px) { .ts-review-compare,.ts-review-diff { grid-template-columns:1fr; gap:8px; } .ts-review-after,.ts-review-diff > div + div { border-left:0; border-top:1px solid var(--separator); padding:8px 0 0; } }
+
+/* Product inspector: concise specifications and secondary route notes. */
+.ts-product-content .ts-item-tz .ts-characteristic-name { font-weight:650; }
+.ts-product-calculation .training-route__step { background:var(--tint-positive); border-color:var(--border-positive); }
+.ts-product-calculation .ts-route-assumption { margin-top:14px; padding-top:8px; border-top:1px solid var(--separator); color:var(--ink-3); font-size:12px; }
+.ts-route-assumption > summary { cursor:pointer; font-size:12px; font-weight:400; color:var(--ink-3); }
+.ts-route-assumption > p { margin:6px 0 0; }
+[data-analysis-result]:has(.ts-products-workspace.has-selection) [data-product-view-actions] { display:none !important; }

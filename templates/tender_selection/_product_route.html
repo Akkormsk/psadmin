@@ -3,3 +3,4 @@
 {% for step in route.steps %}<li><details class="training-route__step" data-step-id="{{ step.id }}"><summary><b>{{ step.position }}</b><span class="ts-route-step-name">{{ step.name }}</span><span class="ts-route-step-price"><small>Предварительно</small><strong>—</strong><small>— / ед.</small></span></summary><div class="training-route__step-body">{% if step.description %}<p>{{ step.description }}</p>{% endif %}{% include 'tender_selection/_route_step_metadata.html' %}{% include "tender_selection/_route_step_placeholder.html" %}</div></details></li>{% endfor %}
 </ol>{% endif %}
 {% if route.steps %}<p class="ts-sub">Расчёт стоимости этапов ещё не выполнен.</p>{% endif %}
+{% if route.assumption %}<details class="ts-route-assumption"><summary>Допущение маршрута</summary><p>{{ route.assumption }}</p></details>{% endif %}
