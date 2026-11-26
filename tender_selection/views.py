@@ -736,6 +736,8 @@ def tender_detail(request, pk):
             item["national_regime"] = item.get("national_regime") or annotation()
     from tenders.calculation_v2_pipeline import source_route_snapshots
     item_routes = source_route_snapshots(tender)
+    from tenders.product_editing import apply_working_products
+    display_items = apply_working_products(tender, display_items, item_routes)
     current_questions = {question.source_item_id: question for question in v2_questions if question.source_item_id}
     for item in display_items:
         item["production_route"] = item_routes.get(item.get("source_id"))
@@ -879,6 +881,8 @@ def tender_detail(request, pk):
     if product_finance_totals and product_finance_totals["state"] == "partial":
         navigation_result = {"label": "Частичный", "kind": "warning"}
     navigation_nmck = notification_total
+    from tenders.product_editing import product_editor
+    editor_state = product_editor(tender) if request.user.is_superuser and not is_archived else None
     response = render(request, "tender_selection/_analysis_result.html" if analysis_snapshot and request.GET.get("full_card") != "1" else "tender_selection/detail.html", {
         "tender": tender,
         "is_manual": is_manual,
@@ -891,6 +895,7 @@ def tender_detail(request, pk):
         "is_fz223": tender.law != "fz44",
         "pushed_estimate_id": estimate_id,
         "pipeline_estimate_id": estimate_id,
+        "product_editor": editor_state,
         "product_calculation": product_calculation,
         "product_finance_totals": product_finance_totals,
         "route_blocked_reason": route_blocked_reason,
@@ -1711,3 +1716,15 @@ def item_route(request, pk, source_pk):
         return JsonResponse(source_route_for(request.user, pk, source_pk))
     except ValueError as exc:
         return JsonResponse({"error": str(exc)}, status=404)
+
+
+@superuser_required
+@require_POST
+def save_products_action(request, pk):
+    from tenders.product_editing import save_products
+    try:
+        state = json.loads(request.body)
+        result = save_products(request.user, pk, state)
+    except (ValueError, TypeError) as exc:
+        return JsonResponse({'error': str(exc)}, status=400)
+    return JsonResponse(result)

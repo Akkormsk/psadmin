@@ -2451,7 +2451,8 @@ def _commercial_requirements(source: TenderSourceItem) -> dict:
 def routing_source_items(tender, *, include_proposals=False):
     """Select accepted goods or the complete proposed composition for preparation."""
     from .document_enrichment import document_proposal_changes
-    active = active_calculation_items(tender)
+    from .product_editing import working_route_sources
+    active = working_route_sources(tender, active_calculation_items(tender))
     if not include_proposals:
         return active
     proposals = [item for item in tender.v2_source_items.filter(source_type="document_proposal", is_active=False).select_related("parent").order_by("parent_id", "pk") if document_proposal_changes(item)]
@@ -2506,6 +2507,10 @@ def build_commercial_items(job: TenderComputeJob | None = None, *, tender=None, 
             if len(candidates) > 1:
                 raise ValueError('Неоднозначная связь предыдущей редакции рабочего товара.')
             current = candidates[0] if candidates else current
+        if current and current.provenance.get('card_edit') and source.is_active and current.source_items.filter(pk=source.pk).exists():
+            if current.status == 'active':
+                result.append(current)
+            continue
         requirements = _commercial_requirements(source)
         changed = bool(current and current.status == 'active' and source.is_active and
             (current.pk not in {item.pk for item in linked} or current.display_name != source.original_text or
@@ -2513,7 +2518,7 @@ def build_commercial_items(job: TenderComputeJob | None = None, *, tender=None, 
         commercial, _ = TenderCommercialItem.objects.update_or_create(
             tender=tender, source_key=current.source_key if current else f"commercial:{source.pk}",
             defaults={**({'job': job} if job is not None else {}), "display_name": source.original_text, "quantity": source.quantity, "unit": source.unit,
-                      "requirements": requirements, "provenance": {"source_item_ids": [source.pk], "draft": not source.is_active},
+                      "requirements": requirements, "provenance": {**(current.provenance if current else {}), "source_item_ids": [source.pk], "draft": not source.is_active},
                       "structure": structure, "status": "active" if source.is_active else "draft"},
         )
         commercial.source_items.set([source])

@@ -31,6 +31,7 @@
       </details>
     </section>
     {% endif %}
+    {% include "tender_selection/_product_editor.html" %}
     {% if display_items %}
     {% if v2_questions %}<div class="ts-question-indicator"><a href="#owner-question-{{ v2_questions.0.pk }}">Нужно уточнить · {{ v2_questions|length }}</a></div>{% endif %}
     <h3 class="settings-subtitle">Перечень товаров ({{ display_item_count }})</h3>
@@ -39,7 +40,8 @@
       <div class="ts-products-list" data-products-list aria-label="Список товаров">
         <p class="ts-sub">Выберите товар, чтобы открыть ТЗ и маршрут.</p>
         <div class="ts-products-columns" aria-hidden="true"><span>Товар</span><span class="ts-quantity-heading">Количество</span><span class="ts-finance-values"><span>НМЦК</span><span>Себестоимость</span><span>РРЦ</span><span>Прибыль*</span></span><span></span></div>
-        {% for item in ungrouped_display_items %}{% include "tender_selection/_product_entry.html" with entry_prefix="single" finance_key=item.finance_key %}{% endfor %}
+        {% for item in ungrouped_display_items %}{% include "tender_selection/_product_entry.html" with entry_prefix="single" finance_key=item.finance_key %}
+        {% if item.components_detail %}<div class="ts-products-children">{% for component in item.components_detail %}{% include "tender_selection/_product_entry.html" with item=component entry_prefix=component.finance_key finance_key=component.finance_key components_only=True %}{% endfor %}</div>{% endif %}{% endfor %}
         {% for group in display_item_groups %}
         <section class="ts-products-group" aria-label="{{ group.name }}">
           <article class="ts-product-entry" data-product-key="group-{{ group.key }}">

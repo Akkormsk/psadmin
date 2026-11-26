@@ -33,6 +33,9 @@
       const response = await fetch(estimate.save_url,{method:'POST',headers:{'X-CSRFToken':calculationCsrf()},body:data});
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Не удалось сохранить расчёт.');
+      if(result.save_url)estimate.save_url=result.save_url;
+      if(result.line_ids)estimate.lines.forEach((line,index)=>line.id=result.line_ids[index]);
+      if(result.pk){estimates.delete(estimate.estimate_id);estimate.estimate_id=result.pk;estimates.set(result.pk,estimate);}
       status.textContent = 'Сохранено';
       document.dispatchEvent(new CustomEvent('ps-product-calculation-saved'));
     });

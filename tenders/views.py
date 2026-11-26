@@ -1215,6 +1215,7 @@ def save_estimate(request, pk=None, pipeline=False):
     return JsonResponse({
         "pk": estimate.pk,
         "url": reverse("tender_pipeline_estimate" if pipeline else "tender_estimate", args=[estimate.pk]),
+        "save_url": reverse("tender_pipeline_estimate_save" if pipeline else "tender_estimate_save", args=[estimate.pk]),
         "line_ids": list(estimate.lines.order_by("sort_order", "pk").values_list("pk", flat=True)),
         "saved_at": timezone.localtime(estimate.updated_at).strftime("%H:%M"),
         "incomplete": meta["incomplete"],

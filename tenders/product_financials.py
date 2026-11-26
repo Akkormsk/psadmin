@@ -52,6 +52,8 @@ def _original(item):
 
 
 def _cost_complete(line):
+    if line.get('requirements', {}).get('card_edit'):
+        return bool(line['requirements']['card_edit'].get('known'))
     if not line['name'] or line['quantity'] <= 0 or not any(line[key] > 0 for key in COST_FIELDS):
         return False
     production = line.get('requirements', {}).get('production') or {}
@@ -100,7 +102,7 @@ def present_product_financials(items, groups, workspace, estimate, notification_
     freshness = workspace['input_status']['state']
     covered = set()
     for item in items:
-        matches = by_source[item['source_id']] if item.get('source_id') is not None else by_commercial[item.get('commercial_id')]
+        matches = by_commercial[item['commercial_id']] if item.get('commercial_id') else by_source[item.get('source_id')]
         if len(matches) != 1:
             continue
         line, values = matches[0]
@@ -109,17 +111,30 @@ def present_product_financials(items, groups, workspace, estimate, notification_
         finance = _original(item)
         finance['complete'] = complete
         finance['state'] = _state(freshness, complete)
-        if values['purchase_total'] > 0:
+        if values['purchase_total'] > 0 or complete:
             finance.update(purchase_total=values['purchase_total'], purchase_unit=values['purchase_unit'])
         if freshness == 'current':
             grouped_quote = values['nmck_total'] is None
-            if grouped_quote or line['nmck_unit'] > 0:
+            if grouped_quote or line['nmck_unit'] > 0 or line.get('requirements', {}).get('card_edit', {}).get('nmck_known'):
                 finance.update(nmck_total=values['nmck_total'], nmck_unit=None if grouped_quote else line['nmck_unit'],
                     rrp_total=values['rrp_total'], rrp_unit=values['rrp_unit'], profit=values['profit'] if complete else None)
             else:
                 finance['state'] = 'partial'
+        edit = line.get('requirements', {}).get('card_edit', {})
+        if edit and not edit.get('known') and edit.get('mode') == 'route' and edit.get('route_price', {}).get('known'):
+            finance['state'] = 'stale'
         item['finance'] = _finish(finance, line['quantity'])
     for group in groups:
+        if str(group['key']).startswith('edit-'):
+            child_finances = [item['finance'] for item in group['items']]
+            finance = _original({})
+            finance['complete'] = all(child['complete'] for child in child_finances)
+            finance['state'] = _state(freshness, finance['complete'])
+            for _, total, _ in COLUMN_DEFINITIONS:
+                known_values = [child[total] for child in child_finances if child[total] is not None]
+                finance[total] = sum(known_values) if len(known_values) == len(child_finances) else None
+            group['finance'] = _finish(finance, None)
+            continue
         source_ids = [item.get('source_id') for item in group['items']]
         if not source_ids or None in source_ids or len(set(source_ids)) != len(source_ids):
             continue
@@ -153,10 +168,10 @@ def present_product_financials(items, groups, workspace, estimate, notification_
     finance = _original({'sum': notification_total})
     finance['complete'] = complete
     finance['state'] = _state(freshness, complete)
-    if summary['purchase_total'] > 0:
+    if summary['purchase_total'] > 0 or complete:
         finance['purchase_total'] = summary['purchase_total']
     if freshness == 'current':
-        known_prices = not missing_items and all(values['nmck_total'] is None or values['nmck_total'] > 0 for values in calculated)
+        known_prices = not missing_items and all(values['nmck_total'] is None or values['nmck_total'] > 0 or line.get('requirements', {}).get('card_edit', {}).get('nmck_known') for line, values in zip(lines, calculated))
         if not known_prices:
             finance['state'] = 'partial'
         if known_prices:

@@ -60,6 +60,11 @@ def estimate_input_status(estimate):
                 state, reason = 'stale', 'Изменились количество или требования товара.'
             elif type(source_id) is int and quantity is not None and old_spec is not None and not (component and component.parent_id):
                 state, reason = 'current', ''
+        card_edit = (line.requirements or {}).get('card_edit')
+        if card_edit and good and good.status == 'active':
+            from .product_editing import input_basis
+            state = 'current' if card_edit.get('basis') == input_basis(good) else 'stale'
+            reason = '' if state == 'current' else 'Изменились рабочие параметры товара.'
         rows.append({'line_id': line.pk, 'name': line.name, 'state': state, 'reason': reason})
     state = 'unknown' if not rows or any(row['state'] == 'unknown' for row in rows) else 'current'
     if any(row['state'] == 'stale' for row in rows):

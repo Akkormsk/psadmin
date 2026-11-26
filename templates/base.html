@@ -465,6 +465,7 @@
           const fragments = new Set(), fragmentAttempts = new Map();
           async function refreshAnalysisResult(data) {
             const target = document.querySelector('[data-analysis-result="' + data.tender_id + '"]');
+            if (target?.closest('[data-products-editing]')) return;
             if (!target || target.dataset.analysisRevision === data.revision || fragments.has(data.tender_id)) return;
             fragments.add(data.tender_id);
             try {
@@ -480,6 +481,7 @@
               const focus = active && target.contains(active) ? {name: active.name, action: active.form?.getAttribute('action')} : null;
               const detailKey = node => (node.closest('tr')?.querySelector('[data-route-source]')?.dataset.routeSource || node.closest('tr')?.querySelector('strong')?.textContent || '') + ':' + node.className + ':' + node.querySelector('summary')?.textContent.trim();
               const openDetails = new Set([...target.querySelectorAll('details[open]')].map(detailKey));
+              if (target.closest('[data-products-editing]')) return;
               target.replaceWith(replacement);
               replacement.querySelectorAll('details').forEach(node => { if (openDetails.has(detailKey(node))) node.open = true; });
               for (const key of ['notification', 'links', 'documents', 'risk', 'risk-summary', 'tab-badge-general', 'tab-badge-products', 'tab-badge-documents', 'tab-badge-analysis', 'tab-badge-results']) {

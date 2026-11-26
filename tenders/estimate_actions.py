@@ -107,6 +107,14 @@ def persist_estimate(user, data, estimate, settings, *, pipeline=False):
     meta = {"incomplete": False, "posted_lines": None, "posted_analysis": None}
     if estimate and estimate.pk:
         estimate = type(estimate).objects.select_for_update().get(pk=estimate.pk)
+    if pipeline and estimate and estimate.tender_id and estimate.tender.v2_commercial_items.filter(provenance__card_edit__isnull=False).exists():
+        from .product_editing import save_route_prices
+        try:
+            estimate = save_route_prices(user, estimate, data)
+        except (ValueError, TypeError) as exc:
+            return estimate, str(exc), meta
+        meta['incomplete'] = estimate.summary_snapshot.get('is_incomplete', True)
+        return estimate, None, meta
     if pipeline and estimate and estimate.status == TenderEstimate.Status.FINALIZED:
         return estimate, "Зафиксированный расчёт нельзя изменить. Создайте его копию.", meta
     try:
