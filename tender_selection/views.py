@@ -882,7 +882,12 @@ def tender_detail(request, pk):
         navigation_result = {"label": "Частичный", "kind": "warning"}
     navigation_nmck = notification_total
     from tenders.product_editing import product_editor
-    editor_state = product_editor(tender) if request.user.is_superuser and not is_archived else None
+    editor_state, editor_error = None, ''
+    if request.user.is_superuser and not is_archived:
+        try:
+            editor_state = product_editor(tender)
+        except ValueError as exc:
+            editor_error = str(exc)
     response = render(request, "tender_selection/_analysis_result.html" if analysis_snapshot and request.GET.get("full_card") != "1" else "tender_selection/detail.html", {
         "tender": tender,
         "is_manual": is_manual,
@@ -896,6 +901,7 @@ def tender_detail(request, pk):
         "pushed_estimate_id": estimate_id,
         "pipeline_estimate_id": estimate_id,
         "product_editor": editor_state,
+        "product_editor_error": editor_error,
         "product_calculation": product_calculation,
         "product_finance_totals": product_finance_totals,
         "route_blocked_reason": route_blocked_reason,
@@ -1721,6 +1727,7 @@ def item_route(request, pk, source_pk):
 @superuser_required
 @require_POST
 def save_products_action(request, pk):
+    import json
     from tenders.product_editing import save_products
     try:
         state = json.loads(request.body)

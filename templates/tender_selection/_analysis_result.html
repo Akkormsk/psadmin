@@ -60,7 +60,7 @@
             </div>
           </article>
           <div class="ts-products-children">
-            {% for item in group.items %}{% with group_id=group.key|stringformat:"s" %}{% with prefix="group-"|add:group_id %}{% include "tender_selection/_product_entry.html" with components_only=True entry_prefix=prefix finance_key=item.finance_key %}{% endwith %}{% endwith %}{% endfor %}
+            {% for item in group.items %}{% with group_id=group.key|stringformat:"s" %}{% with prefix="group-"|add:group_id %}{% include "tender_selection/_product_entry.html" with components_only=True entry_prefix=prefix finance_key=item.finance_key %}{% if item.components_detail %}<div class="ts-products-children">{% for component in item.components_detail %}{% include "tender_selection/_product_entry.html" with item=component components_only=True entry_prefix=component.finance_key finance_key=component.finance_key %}{% endfor %}</div>{% endif %}{% endwith %}{% endwith %}{% endfor %}
           </div>
         </section>
         {% endfor %}

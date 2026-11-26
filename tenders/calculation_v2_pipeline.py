@@ -2666,6 +2666,10 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter, *, _items=Non
         items = list(CalculationComponent.objects.filter(commercial_item__in=commercials, status="active").select_related("commercial_item", "source_item").order_by("commercial_item_id", "sort_order", "pk"))
     else:
         items = _items
+    from .product_editing import component_route_source
+    for item in items:
+        if item.commercial_item.provenance.get('card_edit'):
+            item.source_item = component_route_source(item)
     answers = _route_owner_answer_map([item.source_item for item in items])
     for item in items:
         item.requirements = {**item.requirements, "owner_answers": answers[item.source_item_id]}
@@ -2760,6 +2764,11 @@ def route_tender_batch(job: TenderComputeJob, router: BatchRouter, *, _items=Non
         stale_items = set()
         for item in items:
             source = current_sources.get(item.source_item_id)
+            if item.commercial_item.provenance.get('card_edit'):
+                current_component = CalculationComponent.objects.select_related('commercial_item', 'source_item').get(pk=item.pk)
+                source = component_route_source(current_component) if current_component.status == 'active' and current_component.commercial_item.status == 'active' else None
+                if source is not None:
+                    current_answers.update(_route_owner_answer_map([source]))
             if source is None or source_route_fingerprint(source, current_processes, current_knowledge, current_answers[source.pk]) != fingerprints[item.pk]:
                 stale_items.add(item.pk)
                 job.diagnostics.setdefault('analysis_gaps', []).append({'stage': 'routing', 'source_id': item.source_item_id,
@@ -2882,6 +2891,8 @@ def run_next_tender_understanding_job(*, router: BatchRouter | None = None, enri
 def source_route_snapshots(tender, sources=None):
     """Current accepted-position routes, shared by card, estimate and assistant; SELECT only."""
     sources = list(routing_source_items(tender) if sources is None else sources)
+    from .product_editing import working_route_snapshot_sources
+    sources = working_route_snapshot_sources(tender, sources)
     processes = list(ProcessDefinition.objects.filter(is_active=True).order_by("pk"))
     knowledge = _knowledge_for([])
     plans = {}

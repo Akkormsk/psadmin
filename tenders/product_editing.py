@@ -2,6 +2,7 @@
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 from uuid import uuid4
+from types import SimpleNamespace
 
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
@@ -18,25 +19,77 @@ COST_FIELDS = ('material', 'application', 'logistics')
 
 
 def input_basis(good):
-    return signature({'name': good.display_name, 'quantity': str(good.quantity), 'unit': good.unit,
+    return signature({'name': good.display_name, 'quantity': str(good.quantity.normalize()) if good.quantity is not None else None, 'unit': good.unit,
                       'requirements': good.requirements,
                       'components': list(good.components.filter(status='active').order_by('pk').values(
                           'pk', 'name', 'quantity_per_parent', 'unit', 'requirements', 'parent_id'))})
+
+
+
+def component_basis(component):
+    return signature({'name': component.name,
+                      'quantity': str(component.quantity_per_parent.normalize()),
+                      'batch_quantity': str(component.commercial_item.quantity.normalize()) if component.commercial_item.quantity is not None else None,
+                      'unit': component.unit, 'requirements': component.requirements, 'parent_id': component.parent_id})
 
 
 def _row(obj, kind, saved_line=None):
     saved = deepcopy((obj.provenance or {}).get('card_edit', {}))
     cost = saved.get('manual', {})
     row = {'key': f'{kind}-{obj.pk}', 'name': obj.display_name if kind == 'good' else obj.name,
-           'quantity': str(obj.quantity if kind == 'good' else obj.quantity_per_parent),
+           'quantity': '' if kind == 'good' and obj.quantity is None else str(obj.quantity if kind == 'good' else obj.quantity_per_parent),
            'unit': obj.unit, 'mode': saved.get('mode', 'route'), 'nmck': saved.get('nmck', ''),
-           'group': saved.get('group', saved_line.group_name if saved_line else ''), 'components': []}
+           'group': saved.get('group', saved_line.group_name if saved_line else ''), 'components': [],
+           'cost_entry': saved.get('cost_entry', 'parts' if cost.get('application') or cost.get('logistics') else 'total'),
+           'total': cost.get('total', cost.get('material', ''))}
     for field in COST_FIELDS:
         row[field] = cost.get(field, '')
+    route = saved.get('route_price')
+    row['route_label'] = 'Цена маршрута неизвестна.'
+    if route and route.get('known'):
+        basis = input_basis(obj) if kind == 'good' else component_basis(obj)
+        row['route_label'] = 'Сохранённая цена маршрута.' if route.get('basis') == basis else 'Сохранённая цена требует пересчёта.'
     if saved_line and not saved:
         row['nmck'] = str(saved_line.nmck_unit)
+        if not saved_line.requirements.get('production') and any(getattr(saved_line, field + '_unit') > 0 for field in COST_FIELDS):
+            row['mode'] = 'manual'
+            row['cost_entry'] = 'parts'
+            row['total'] = ''
+            row.update({field: str(getattr(saved_line, field + '_unit')) for field in COST_FIELDS})
     return row
 
+
+
+def _matching_line(lines, *, good=None, component=None, source_id=None):
+    if good is not None:
+        matches = [line for line in lines if line.commercial_item_id == good.pk]
+        if not matches and good.structure == TenderCommercialItem.Structure.SIMPLE:
+            component_ids = {item.pk for item in good.components.all() if item.status == 'active'}
+            matches = [line for line in lines if line.component_id in component_ids]
+    elif component is not None:
+        matches = [line for line in lines if line.component_id == component.pk]
+    else:
+        matches = []
+    if not matches and source_id:
+        matches = [line for line in lines if not line.commercial_item_id and not line.component_id and line.requirements.get('source_item_id') == source_id]
+    if len(matches) > 1:
+        raise ValueError('У товара несколько несопоставленных строк расчёта. Проверьте связи перед редактированием.')
+    return matches[0] if matches else None
+
+
+def _source_row(source, lines, notice, *, component=False):
+    from .document_enrichment import notification_quote_source
+    model = SimpleNamespace(pk=source.pk, display_name=source.original_text, name=source.original_text,
+                            quantity=source.quantity, quantity_per_parent=source.metadata.get('quantity_per_parent', '1'),
+                            unit=source.unit, provenance={})
+    row = _row(model, 'component' if component else 'good', _matching_line(lines, source_id=source.pk))
+    row['key'] = ('component-source-' if component else 'source-') + str(source.pk)
+    quote = notification_quote_source(source)
+    index = quote.metadata.get('notification_index') if quote else None
+    if not component and row['nmck'] == '' and type(index) is int and 0 <= index < len(notice):
+        price = notice[index].get('price')
+        row['nmck'] = '' if price is None else str(price)
+    return row
 
 def product_editor(tender):
     goods = list(tender.v2_commercial_items.filter(status='active').filter(Q(provenance__draft=False) | Q(provenance__draft__isnull=True)).prefetch_related('components', 'source_items').order_by('pk'))
@@ -48,8 +101,8 @@ def product_editor(tender):
     for good in goods:
         linked = list(good.source_items.all())
         represented.update(source.pk for source in linked)
-        matches = [line for line in lines if line.commercial_item_id == good.pk or not line.component_id and len(linked) == 1 and line.requirements.get('source_item_id') == linked[0].pk]
-        row = _row(good, 'good', matches[0] if len(matches) == 1 else None)
+        previous = _matching_line(lines, good=good, source_id=linked[0].pk if len(linked) == 1 else None)
+        row = _row(good, 'good', previous)
         if row['nmck'] == '' and not good.provenance.get('card_edit') and len(linked) == 1:
             from .document_enrichment import notification_quote_source
             quote_source = notification_quote_source(linked[0])
@@ -62,9 +115,8 @@ def product_editor(tender):
             for component in good.components.all():
                 if component.status != 'active':
                     continue
-                matches = [line for line in lines if line.component_id == component.pk or
-                           not line.commercial_item_id and component.source_item_id and line.requirements.get('source_item_id') == component.source_item_id]
-                child = _row(component, 'component', matches[0] if len(matches) == 1 else None)
+                previous = _matching_line(lines, component=component, source_id=component.source_item_id)
+                child = _row(component, 'component', previous)
                 child['parent_key'] = f'component-{component.parent_id}' if component.parent_id else None
                 row['components'].append(child)
         rows.append(row)
@@ -73,8 +125,9 @@ def product_editor(tender):
     from .calculation_v2_pipeline import active_calculation_items
     for source in active_calculation_items(tender):
         if source.pk not in represented:
-            rows.append({'key': f'source-{source.pk}', 'name': source.original_text, 'quantity': str(source.quantity or ''),
-                         'unit': source.unit, 'mode': 'route', 'nmck': '', 'material': '', 'application': '', 'logistics': '', 'group': '', 'components': []})
+            row = _source_row(source, lines, notice)
+            row['components'] = [_source_row(child, lines, notice, component=True) for child in source.derived_items.filter(is_active=True, source_type='document_component').order_by('pk')]
+            rows.append(row)
     if not rows and not tender.v2_commercial_items.exists() and not tender.v2_source_items.exists():
         from tender_selection.notification import parse_notification
         for index, source in enumerate(parse_notification(tender.notification_raw or {}).get('items', [])):
@@ -104,6 +157,14 @@ def _number(value, *, optional=False, positive=False):
         raise ValueError('Укажите корректные количество и цены.') from None
 
 
+
+def manual_values(row):
+    if row.get('cost_entry', 'parts') == 'total':
+        total = _number(row.get('total'), optional=True)
+        return {'material': total, 'application': None, 'logistics': None}
+    return {field: _number(row.get(field), optional=True) for field in COST_FIELDS}
+
+
 def _validate(rows, allowed, *, components=False):
     if not isinstance(rows, list):
         raise ValueError('Некорректный перечень товаров.')
@@ -120,14 +181,18 @@ def _validate(rows, allowed, *, components=False):
                 raise ValueError('Заполните название и единицу измерения.')
         if len(row['unit']) > CalculationComponent._meta.get_field('unit').max_length or len(row['name']) > TenderLine._meta.get_field('name').max_length:
             raise ValueError('Сократите название или единицу измерения.')
-        quantity = _number(row.get('quantity'), positive=True)
+        quantity = _number(row.get('quantity'), optional=not components, positive=True)
         quantity_field = CalculationComponent._meta.get_field('quantity_per_parent') if components else TenderCommercialItem._meta.get_field('quantity')
-        if quantity != quantity.quantize(Decimal(1).scaleb(-quantity_field.decimal_places)):
+        if quantity is not None and quantity != quantity.quantize(Decimal(1).scaleb(-quantity_field.decimal_places)):
             raise ValueError('Количество содержит слишком много знаков после запятой.')
-        _number(row.get('nmck'), optional=True)
+        price = _number(row.get('nmck'), optional=True)
+        if price is not None and price != price.quantize(Decimal('0.01')):
+            raise ValueError('Укажите цены с точностью до копейки.')
         if row.get('mode') not in ('route', 'manual'):
             raise ValueError('Выберите способ определения себестоимости.')
-        prices = [_number(row.get(field), optional=True) for field in COST_FIELDS]
+        if row.get('cost_entry', 'parts') not in ('total', 'parts'):
+            raise ValueError('Выберите ввод общей суммы или детализации.')
+        prices = list(manual_values(row).values())
         if any(price is not None and price != price.quantize(Decimal('0.01')) for price in prices):
             raise ValueError('Укажите цены с точностью до копейки.')
         if row['mode'] == 'manual' and all(price is None for price in prices):
@@ -145,9 +210,9 @@ def _remember(obj, row, user):
     history = [*history, {'at': timezone.now().isoformat(), 'actor_id': user.pk,
                          'name': getattr(obj, 'display_name', getattr(obj, 'name', '')),
                          'quantity': str(getattr(obj, 'quantity', getattr(obj, 'quantity_per_parent', ''))),
-                         'unit': obj.unit, 'previous': {key: value for key, value in edit.items() if key != 'history'}}]
-    previous['card_edit'] = {'mode': row['mode'], 'nmck': row.get('nmck', ''), 'group': row.get('group', ''),
-                             'manual': {field: row.get(field, '') for field in COST_FIELDS}, 'history': history}
+                         'unit': obj.unit, 'previous': {key: edit[key] for key in ('mode', 'manual', 'nmck', 'group') if key in edit}}]
+    previous['card_edit'] = {'mode': row['mode'], 'cost_entry': row.get('cost_entry', 'parts'), 'nmck': row.get('nmck', ''), 'group': row.get('group', ''),
+                             'manual': {field: row.get(field, '') for field in (*COST_FIELDS, 'total')}, 'history': history}
     obj.provenance = previous
 
 
@@ -159,9 +224,12 @@ def _route_price(good, previous, unchanged):
         edit = previous.requirements.get('card_edit', {})
         if edit.get('route_price'):
             return edit['route_price']
+        from .product_financials import _cost_complete
+        old_values = {field + '_unit': getattr(previous, field + '_unit') for field in COST_FIELDS}
+        complete = _cost_complete({'name': previous.name, 'quantity': previous.quantity, 'requirements': previous.requirements, **old_values})
         return {'values': {field: str(getattr(previous, field + '_unit')) for field in COST_FIELDS},
-                'known': any(getattr(previous, field + '_unit') > 0 for field in COST_FIELDS),
-                'basis': input_basis(good) if unchanged else None,
+                'known': complete,
+                'basis': input_basis(good) if unchanged and previous.quantity == (good.quantity or 0) and previous.requirements.get('source_unit', good.unit) == good.unit else None,
                 'requirements': deepcopy(previous.requirements)}
     return {'values': {}, 'known': False, 'basis': None, 'requirements': {}}
 
@@ -173,6 +241,7 @@ def save_products(user, tender_id, state, *, route_updates=None):
     tender = Tender.objects.select_for_update().get(pk=tender_id)
     if tender.status == Tender.DISMISSED:
         raise ValueError('Сначала верните тендер из архива.')
+    list(tender.estimates.select_for_update().values_list('pk', flat=True))
     current = product_editor(tender)
     if not isinstance(state, dict) or state.get('revision') != current['revision']:
         raise ValueError('Товары или расчёт изменились. Откройте редактирование заново.')
@@ -183,7 +252,7 @@ def save_products(user, tender_id, state, *, route_updates=None):
         old = allowed.get(row['key'], {})
         _validate(row.get('components', []), {c['key'] for c in old.get('components', [])}, components=True)
     from .calculation_v2_pipeline import ingest_source_items, build_commercial_items, active_calculation_items
-    if not tender.v2_source_items.exists() and any(row['key'].startswith('notice-') for row in rows):
+    if not tender.v2_source_items.exists() and any(row['key'].startswith('notice-') for row in current['items']):
         ingest_source_items(tender)
     goods = list(tender.v2_commercial_items.exclude(status='draft').prefetch_related('source_items', 'components'))
     represented = {s.pk for good in goods for s in good.source_items.all()}
@@ -203,18 +272,18 @@ def save_products(user, tender_id, state, *, route_updates=None):
     kept, changed, saved = set(), [], []
     for row in rows:
         good = by_key.get(row['key'])
+        if good is None and not row['key'].startswith('new-'):
+            raise ValueError('Не удалось сопоставить рабочую позицию с источником.')
         if good is None:
             good = TenderCommercialItem(tender=tender, source_key='manual:' + uuid4().hex)
         before = input_basis(good) if good.pk else None
+        previous_structure = good.structure
         linked = set(good.source_items.values_list('pk', flat=True)) if good.pk else set()
-        candidates = [line for line in old_lines if line.commercial_item_id == good.pk and good.pk or not line.component_id and line.requirements.get('source_item_id') in linked]
-        if len(candidates) > 1:
-            raise ValueError('У товара несколько строк расчёта. Требуется уточнить их связь перед редактированием.')
-        old_line = candidates[0] if candidates else None
+        old_line = _matching_line(old_lines, good=good, source_id=next(iter(linked)) if len(linked) == 1 else None) if good.pk else None
         route = deepcopy((good.provenance or {}).get('card_edit', {}).get('route_price'))
-        old_component_basis = {c.pk: signature({'name': c.name, 'quantity': str(c.quantity_per_parent), 'unit': c.unit, 'requirements': c.requirements}) for c in good.components.all()} if good.pk else {}
+        old_component_basis = {c.pk: component_basis(c) for c in good.components.all()} if good.pk else {}
         _remember(good, row, user)
-        good.display_name, good.quantity, good.unit = row['name'].strip(), _number(row['quantity'], positive=True), row['unit'].strip()
+        good.display_name, good.quantity, good.unit = row['name'].strip(), _number(row['quantity'], optional=True, positive=True), row['unit'].strip()
         good.status = 'active'
         good.structure = TenderCommercialItem.Structure.COMPOSITE if row.get('components') else TenderCommercialItem.Structure.SIMPLE
         good.save()
@@ -226,24 +295,33 @@ def save_products(user, tender_id, state, *, route_updates=None):
         kept.add(good.pk)
         component_ids = []
         existing_components = {f'component-{c.pk}': c for c in good.components.all()}
+        existing_components.update({f'component-source-{c.source_item_id}': c for c in good.components.all() if c.source_item_id})
         for index, child in enumerate(row.get('components', [])):
             component = existing_components.get(child['key']) or CalculationComponent(commercial_item=good)
             stored_route = deepcopy((component.provenance or {}).get('card_edit', {}).get('route_price'))
-            component_lines = [line for line in old_lines if line.component_id == component.pk and component.pk or
-                               not line.commercial_item_id and component.source_item_id and line.requirements.get('source_item_id') == component.source_item_id]
-            if len(component_lines) > 1:
-                raise ValueError('У компонента несколько строк расчёта. Уточните их связь.')
+            component_line = _matching_line(old_lines, component=component, source_id=component.source_item_id) if component.pk else None
             _remember(component, child, user)
             component.name, component.unit = child['name'].strip(), child['unit'].strip()
             component.quantity_per_parent = _number(child['quantity'], positive=True)
             component.sort_order, component.status = index, 'active'
+            if component.source_item_id is None:
+                component.source_item = TenderSourceItem.objects.create(tender=tender, source_type='document_component',
+                    source_key='manual-component:' + uuid4().hex, parent=good.source_items.first(),
+                    original_text=component.name, quantity=component.effective_quantity, unit=component.unit,
+                    requirements=deepcopy(component.requirements), metadata={'quantity_per_parent': str(component.quantity_per_parent)},
+                    provenance={'actor_id': user.pk, 'kind': 'manual_component'})
             component.save()
-            basis = signature({'name': component.name, 'quantity': str(component.quantity_per_parent), 'unit': component.unit, 'requirements': component.requirements})
+            basis = component_basis(component)
             if stored_route is None:
-                old = component_lines[0] if component_lines else None
+                old = component_line
+                from .product_financials import _cost_complete
                 stored_route = {'values': {field: str(getattr(old, field + '_unit')) for field in COST_FIELDS} if old else {},
-                                'known': bool(old and any(getattr(old, field + '_unit') > 0 for field in COST_FIELDS)),
-                                'basis': basis if old_component_basis.get(component.pk) == basis else None}
+                                'known': bool(old and _cost_complete({'name': old.name, 'quantity': old.quantity,
+                                    'requirements': old.requirements, **{field + '_unit': getattr(old, field + '_unit') for field in COST_FIELDS}})),
+                                'basis': basis if old_component_basis.get(component.pk) == basis else None,
+                                'requirements': deepcopy(old.requirements) if old else {}}
+            if route_updates and f'component-{component.pk}' in route_updates:
+                stored_route = {**route_updates[f'component-{component.pk}'], 'basis': basis}
             component.provenance['card_edit']['route_price'] = stored_route
             component.save(update_fields=['provenance'])
             component_ids.append(component.pk)
@@ -251,8 +329,9 @@ def save_products(user, tender_id, state, *, route_updates=None):
             raise ValueError('Сначала исключите вложенные компоненты выбранного состава.')
         if row.get('components'):
             good.components.exclude(pk__in=component_ids).update(status='superseded')
-        elif good.components.filter(status='active').count() > 1:
+        elif previous_structure != TenderCommercialItem.Structure.SIMPLE:
             good.components.filter(status='active').update(status='superseded')
+            CalculationComponent.objects.create(commercial_item=good, source_item=good.source_items.first(), name=good.display_name, unit=good.unit, requirements=deepcopy(good.requirements))
         elif good.components.filter(status='active').exists():
             component = good.components.get(status='active')
             component.name, component.unit, component.requirements = good.display_name, good.unit, deepcopy(good.requirements)
@@ -262,8 +341,8 @@ def save_products(user, tender_id, state, *, route_updates=None):
             CalculationComponent.objects.create(commercial_item=good, source_item=good.source_items.first(), name=good.display_name, unit=good.unit, requirements=deepcopy(good.requirements))
         unchanged = before == input_basis(good)
         route = route or _route_price(good, old_line, unchanged)
-        if route_updates and good.pk in route_updates:
-            route = route_updates[good.pk]
+        if route_updates and f'good-{good.pk}' in route_updates:
+            route = route_updates[f'good-{good.pk}']
             route['basis'] = input_basis(good)
         good.provenance['card_edit']['route_price'] = route
         good.save(update_fields=['provenance'])
@@ -287,44 +366,68 @@ def save_products(user, tender_id, state, *, route_updates=None):
         vat_rate_snapshot=previous.vat_rate_snapshot if previous else settings.vat_rate,
         document_analysis=deepcopy(previous.document_analysis) if previous else {})
     lines = []
-    for index, (good, row, route, old_line) in enumerate(saved):
-        manual = row['mode'] == 'manual'
-        values = {field: _number(row.get(field), optional=True) for field in COST_FIELDS} if manual else {field: _number(route['values'].get(field), optional=True) for field in COST_FIELDS}
-        known = any(value is not None for value in values.values()) if manual else route['known'] and route['basis'] == input_basis(good)
-        if not manual and row.get('components'):
-            component_values = {field: Decimal('0') for field in COST_FIELDS}
-            known = True
-            for component in good.components.filter(status='active'):
-                edit = component.provenance['card_edit']
-                component_basis = signature({'name': component.name, 'quantity': str(component.quantity_per_parent), 'unit': component.unit, 'requirements': component.requirements})
-                if edit['mode'] == 'manual':
-                    prices = edit['manual']
-                else:
-                    prices = edit['route_price']['values']
-                    known = known and edit['route_price']['known'] and edit['route_price']['basis'] == component_basis
-                # Existing routing supports direct components; retain nested input as unverified.
-                known = known and component.parent_id is None
-                for field in COST_FIELDS:
-                    component_values[field] += (_number(prices.get(field), optional=True) or 0) * component.quantity_per_parent
-            values = component_values
+    for good, row, route, old_line in saved:
         nmck = _number(row.get('nmck'), optional=True)
-        requirements = deepcopy(old_line.requirements) if old_line else {}
         sources = list(good.source_items.all())
+        if row['mode'] == 'route' and row.get('components'):
+            components = list(good.components.filter(status='active').select_related('commercial_item'))
+            source_id = sources[0].pk
+            quote = {'source_item_id': source_id, 'member_source_ids': [c.source_item_id for c in components],
+                     'quantity': str(good.quantity) if good.quantity is not None else None, 'unit': good.unit,
+                     'price': str(nmck) if nmck is not None else None,
+                     'sum': str(nmck * good.quantity) if nmck is not None and good.quantity is not None else None}
+            for component in components:
+                edit = component.provenance['card_edit']
+                component_route = edit['route_price']
+                manual = edit['mode'] == 'manual'
+                values = manual_values({**edit['manual'], 'cost_entry': edit.get('cost_entry', 'parts')}) if manual else {
+                    field: _number(component_route['values'].get(field), optional=True) for field in COST_FIELDS}
+                known = any(value is not None for value in values.values()) if manual else bool(
+                    component_route['known'] and component_route['basis'] == component_basis(component))
+                known = known and good.quantity is not None and component.parent_id is None
+                old = _matching_line(old_lines, component=component, source_id=component.source_item_id)
+                requirements = deepcopy(component_route.get('requirements') or (old.requirements if old else {}))
+                requirements.update(source_item_id=component.source_item_id, source_unit=component.unit,
+                    source_requirements=deepcopy(component.requirements),
+                    source_group={**quote, 'component_quantity': str(component.effective_quantity or 0)},
+                    card_edit={'basis': input_basis(good), 'mode': edit['mode'], 'known': known,
+                               'nmck_known': nmck is not None and good.quantity is not None,
+                               'route_known': bool(component_route.get('known'))})
+                TenderLine.objects.create(estimate=estimate, component=component, name=component.name,
+                    quantity=component.effective_quantity or 0, nmck_unit=0,
+                    requirements=requirements, sort_order=estimate.lines.count(),
+                    group_key=f'source-{source_id}', group_name=good.display_name,
+                    product_url=old.product_url if old else '', comment=old.comment if old else '',
+                    **{field + '_unit': value or 0 for field, value in values.items()})
+            continue
+        manual = row['mode'] == 'manual'
+        values = manual_values(row) if manual else {field: _number(route['values'].get(field), optional=True) for field in COST_FIELDS}
+        known = any(value is not None for value in values.values()) if manual else route['known'] and route['basis'] == input_basis(good)
+        known = known and good.quantity is not None
+        requirements = deepcopy(old_line.requirements) if old_line else {}
         if len(sources) == 1:
             requirements['source_item_id'] = sources[0].pk
-        if route_updates and good.pk in route_updates:
-            requirements['production'] = deepcopy(route['requirements'].get('production', {}))
+        if route.get('requirements', {}).get('production'):
+            requirements['production'] = deepcopy(route['requirements']['production'])
         requirements.update(source_requirements=deepcopy(good.requirements), source_unit=good.unit,
                             card_edit={'basis': input_basis(good), 'mode': row['mode'], 'known': known,
-                                       'nmck_known': nmck is not None, 'route_price': route})
+                                       'nmck_known': nmck is not None and good.quantity is not None,
+                                       'route_known': bool(route.get('known'))})
         line = TenderLine.objects.create(estimate=estimate, commercial_item=good, name=good.display_name,
-            quantity=good.quantity, nmck_unit=nmck or 0, requirements=requirements, sort_order=index,
+            quantity=good.quantity or 0, nmck_unit=nmck or 0, requirements=requirements, sort_order=estimate.lines.count(),
             product_url=old_line.product_url if old_line else '', comment=old_line.comment if old_line else '',
             group_key=(old_line.group_key if old_line and old_line.group_name == row.get('group') else 'group-' + signature(row['group'])[:32]) if row.get('group') else '', group_name=row.get('group', ''),
             **{field + '_unit': value or 0 for field, value in values.items()})
+    for line in estimate.lines.all():
         lines.append({'name': line.name, 'quantity': line.quantity, 'nmck_unit': line.nmck_unit,
                       'group_key': line.group_key, 'group_name': line.group_name, 'requirements': line.requirements,
                       **{field + '_unit': getattr(line, field + '_unit') for field in COST_FIELDS}})
+    from .services import calculation_group_quotes
+    group_quotes = calculation_group_quotes(lines)
+    for line in estimate.lines.all():
+        if line.group_key in group_quotes:
+            line.requirements['card_edit']['nmck_known'] = True
+            line.save(update_fields=['requirements'])
     _, summary = calculate_tender(lines, estimate.reduction_percent, estimate.russia_delivery, estimate.vat_rate_snapshot)
     estimate.summary_snapshot = {key: value if key == 'groups' else str(value) for key, value in summary.items()}
     estimate.summary_snapshot.update(is_incomplete=not saved or any(not l.requirements['card_edit']['known'] or not l.requirements['card_edit']['nmck_known'] for l in estimate.lines.all()), conditions_fingerprint=conditions_fingerprint(tender.conditions))
@@ -359,7 +462,7 @@ def apply_working_products(tender, items, routes):
             for component in good.components.all():
                 if component.status != 'active':
                     continue
-                child = {'source_id': component.source_item_id, 'name': component.name,
+                child = {'source_id': component.source_item_id, 'component_id': component.pk, 'name': component.name,
                          'quantity': component.effective_quantity, 'unit': component.unit,
                          'parent_display_name': good.display_name, 'national_regime': annotation(),
                          'tz_rows': [characteristic_display(row) for row in component.requirements.get('characteristics', [])],
@@ -396,9 +499,16 @@ def save_route_prices(user, estimate, data):
             continue
         if requirements['production'] == line.requirements.get('production'):
             continue
-        updates[line.commercial_item_id] = {'values': {field: str(_number(row.get(field + '_unit'))) for field in COST_FIELDS},
-                                           'known': bool(requirements['production'].get('costs')),
-                                           'requirements': deepcopy(requirements)}
+        from .product_financials import _cost_complete
+        production = requirements['production']
+        totals = production.get('totals') or {}
+        values = {field: _number(totals.get(field + '_unit'), optional=True) for field in COST_FIELDS}
+        calculated = {'name': line.name, 'quantity': line.quantity, 'requirements': {'production': production},
+                      **{field + '_unit': value or Decimal('0') for field, value in values.items()}}
+        complete = all(value is not None for value in values.values()) and _cost_complete(calculated)
+        key = f'component-{line.component_id}' if line.component_id else f'good-{line.commercial_item_id}'
+        updates[key] = {'values': {field: str(value) if value is not None else None for field, value in values.items()},
+                                           'known': complete, 'requirements': {'production': deepcopy(production)}}
     if not updates:
         return estimate
     save_products(user, estimate.tender_id, product_editor(estimate.tender), route_updates=updates)
@@ -426,3 +536,22 @@ def working_route_sources(tender, sources):
         projected.requirements = deepcopy(good.requirements)
         result.append(projected)
     return result
+
+
+def component_route_source(component):
+    source = deepcopy(component.source_item)
+    if source is not None and component.commercial_item.provenance.get('card_edit'):
+        source.original_text, source.quantity, source.unit = component.name, component.effective_quantity, component.unit
+        source.requirements = deepcopy(component.requirements)
+    return source
+
+
+def working_route_snapshot_sources(tender, sources):
+    result = {source.pk: source for source in working_route_sources(tender, sources)}
+    components = CalculationComponent.objects.filter(commercial_item__tender=tender, commercial_item__status='active',
+        commercial_item__provenance__card_edit__isnull=False, status='active').select_related('commercial_item', 'source_item')
+    for component in components:
+        source = component_route_source(component)
+        if source is not None:
+            result[source.pk] = source
+    return list(result.values())

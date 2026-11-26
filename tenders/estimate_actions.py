@@ -105,6 +105,9 @@ def persist_estimate(user, data, estimate, settings, *, pipeline=False):
     (kept even on a validation error so the form can re-render them).
     Shared by the plain form POST and the autosave endpoint."""
     meta = {"incomplete": False, "posted_lines": None, "posted_analysis": None}
+    if pipeline and estimate and estimate.tender_id:
+        from tender_selection.models import Tender
+        Tender.objects.select_for_update().get(pk=estimate.tender_id)
     if estimate and estimate.pk:
         estimate = type(estimate).objects.select_for_update().get(pk=estimate.pk)
     if pipeline and estimate and estimate.tender_id and estimate.tender.v2_commercial_items.filter(provenance__card_edit__isnull=False).exists():

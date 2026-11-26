@@ -54,11 +54,11 @@ def _original(item):
 def _cost_complete(line):
     if line.get('requirements', {}).get('card_edit'):
         return bool(line['requirements']['card_edit'].get('known'))
-    if not line['name'] or line['quantity'] <= 0 or not any(line[key] > 0 for key in COST_FIELDS):
+    if not line['name'] or line['quantity'] <= 0:
         return False
     production = line.get('requirements', {}).get('production') or {}
     if production.get('stage') != 'training_dialogue':
-        return True
+        return any(line[key] > 0 for key in COST_FIELDS)
     steps = production.get('route', {}).get('processes') or []
     required = {step.get('id') for step in steps}
     priced = {cost.get('step_id') for cost in production.get('costs', []) if cost.get('amount_total') is not None}
@@ -89,7 +89,7 @@ def present_product_financials(items, groups, workspace, estimate, notification_
         lines.append(line)
     calculated, summary = calculate_tender(lines, estimate.reduction_percent,
         estimate.russia_delivery, estimate.vat_rate_snapshot)
-    by_source, by_commercial, by_group = defaultdict(list), defaultdict(list), defaultdict(list)
+    by_source, by_commercial, by_component, by_group = defaultdict(list), defaultdict(list), defaultdict(list), defaultdict(list)
     for line, values in zip(lines, calculated):
         pair = (line, values)
         source_id = (line.get('requirements') or {}).get('source_item_id')
@@ -97,11 +97,38 @@ def present_product_financials(items, groups, workspace, estimate, notification_
             by_source[source_id].append(pair)
         if line.get('commercial_item_id'):
             by_commercial[line['commercial_item_id']].append(pair)
+        if line.get('component_id'):
+            by_component[line['component_id']].append(pair)
         if line.get('group_key'):
             by_group[line['group_key']].append(pair)
     freshness = workspace['input_status']['state']
     covered = set()
     for item in items:
+        component_matches = [pair for child in item.get('components_detail', [])
+                             for pair in by_component.get(child.get('component_id'), [])]
+        if component_matches:
+            group_key = component_matches[0][0].get('group_key')
+            group_values = summary.get('groups', {}).get(group_key, {})
+            complete = all(_cost_complete(line) for line, _ in component_matches)
+            finance = _original(item)
+            finance.update(complete=complete, state=_state(freshness, complete))
+            finance['purchase_total'] = sum(values['purchase_total'] for _, values in component_matches)
+            if freshness == 'current' and group_values.get('nmck_total') is not None:
+                finance.update(nmck_total=_source_decimal(group_values['nmck_total']),
+                    rrp_total=_source_decimal(group_values.get('rrp_total')),
+                    profit=_source_decimal(group_values.get('gross_profit')) if complete else None)
+            item['finance'] = _finish(finance, _source_decimal(item.get('quantity')))
+            for child in item['components_detail']:
+                matches = by_component.get(child.get('component_id'), [])
+                if len(matches) != 1:
+                    continue
+                line, values = matches[0]
+                child_finance = _original(child)
+                child_finance.update(complete=_cost_complete(line), state=_state(freshness, _cost_complete(line)),
+                    purchase_total=values['purchase_total'], purchase_unit=values['purchase_unit'])
+                child['finance'] = _finish(child_finance, line['quantity'])
+                covered.add(line['id'])
+            continue
         matches = by_commercial[item['commercial_id']] if item.get('commercial_id') else by_source[item.get('source_id')]
         if len(matches) != 1:
             continue
@@ -121,7 +148,7 @@ def present_product_financials(items, groups, workspace, estimate, notification_
             else:
                 finance['state'] = 'partial'
         edit = line.get('requirements', {}).get('card_edit', {})
-        if edit and not edit.get('known') and edit.get('mode') == 'route' and edit.get('route_price', {}).get('known'):
+        if edit and not edit.get('known') and edit.get('mode') == 'route' and edit.get('route_known'):
             finance['state'] = 'stale'
         item['finance'] = _finish(finance, line['quantity'])
     for group in groups:

@@ -12,10 +12,48 @@
     return `<label><span>${label}</span><input data-field="${name}" value="${escape(row[name])}" ${numeric ? 'inputmode="decimal"' : ''}></label>`;
   }
   function price(row) {
-    return `<div class="ts-product-edit-price"><label><span>Себестоимость за единицу</span><select data-field="mode"><option value="route" ${row.mode === 'route' ? 'selected' : ''}>По маршруту</option><option value="manual" ${row.mode === 'manual' ? 'selected' : ''}>Вручную</option></select></label><div data-manual-price ${row.mode === 'manual' ? '' : 'hidden'}>${field(row, 'material', 'Себестоимость / материал, ₽', true)}<details><summary>Детализация затрат</summary>${field(row, 'application', 'Нанесение, ₽', true)}${field(row, 'logistics', 'Логистика, ₽', true)}</details></div><small class="ts-sub" data-route-price-note ${row.mode === 'route' ? '' : 'hidden'}>Используется сохранённая цена актуального маршрута.</small></div>`;
+    const manual = row.mode === 'manual';
+    const total = row.cost_entry === 'total';
+    return `<div class="ts-product-edit-price">
+      <label><span>Себестоимость за единицу</span>
+        <select data-field="mode">
+          <option value="route" ${manual ? '' : 'selected'}>По маршруту</option>
+          <option value="manual" ${manual ? 'selected' : ''}>Вручную</option>
+        </select>
+      </label>
+      <div data-manual-price ${manual ? '' : 'hidden'}>
+        <label><span>Ввод цены</span><select data-field="cost_entry">
+          <option value="total" ${total ? 'selected' : ''}>Общая сумма</option>
+          <option value="parts" ${total ? '' : 'selected'}>Детализация</option>
+        </select></label>
+        <div data-manual-total ${total ? '' : 'hidden'}>${field(row, 'total', 'Себестоимость единицы, ₽', true)}</div>
+        <div data-manual-parts ${total ? 'hidden' : ''}>
+          ${field(row, 'material', 'Материал / товар, ₽', true)}
+          ${field(row, 'application', 'Нанесение / работы, ₽', true)}
+          ${field(row, 'logistics', 'Логистика на единицу, ₽', true)}
+        </div>
+      </div>
+      <small class="ts-sub" data-route-price-note ${manual ? 'hidden' : ''}>${escape(row.route_label || 'Цена появится после расчёта маршрута.')}</small>
+    </div>`;
   }
   function rowHtml(row, child = false) {
-    return `<div class="ts-product-edit-row ${child ? 'ts-product-edit-component' : ''}" data-edit-key="${escape(row.key)}"><div class="ts-product-edit-fields">${field(row, 'name', 'Наименование')}${field(row, 'quantity', child ? 'Количество в составе' : 'Количество', true)}${field(row, 'unit', 'Ед.')}<button type="button" class="ts-quiet" data-remove-product aria-label="Исключить ${escape(row.name)}">Исключить</button></div><details class="ts-product-edit-options"><summary>Цена${child ? '' : ' и состав'}</summary><div class="ts-product-edit-prices">${child ? '' : field(row, 'nmck', 'Рабочая цена за единицу, ₽', true)}${price(row)}</div>${child ? '' : `${field(row, 'group', 'Группа')}<div data-component-rows>${(row.components || []).map(item => rowHtml(item, true)).join('')}</div><button type="button" class="ts-quiet" data-add-component>+ Добавить компонент</button>`}</details></div>`;
+    return `<div class="ts-product-edit-row ${child ? 'ts-product-edit-component' : ''}" data-edit-key="${escape(row.key)}">
+      <div class="ts-product-edit-fields">
+        ${field(row, 'name', 'Наименование')}
+        ${field(row, 'quantity', child ? 'Количество в составе' : 'Количество', true)}
+        ${field(row, 'unit', 'Ед.')}
+        <button type="button" class="ts-quiet" data-remove-product aria-label="Исключить ${escape(row.name)}">Исключить</button>
+      </div>
+      <details class="ts-product-edit-options"><summary>Цена${child ? '' : ' и состав'}</summary>
+        <div class="ts-product-edit-prices">
+          ${child ? '' : field(row, 'nmck', 'НМЦК за единицу (рабочая), ₽', true)}
+          ${price(row)}
+        </div>
+        ${child ? '' : `${field(row, 'group', 'Группа')}
+          <div data-component-rows>${(row.components || []).map(item => rowHtml(item, true)).join('')}</div>
+          <button type="button" class="ts-quiet" data-add-component>+ Добавить компонент</button>`}
+      </details>
+    </div>`;
   }
   function render() {
     editor.querySelector('[data-product-edit-table]').innerHTML = draft.items.map(row => rowHtml(row)).join('');
@@ -35,7 +73,7 @@
     render(); toggle(true); status('');
   }
   function newRow() {
-    return {key:'new-' + crypto.randomUUID(), name:'', quantity:'1', unit:'шт', mode:'route', nmck:'', material:'', application:'', logistics:'', group:'', components:[]};
+    return {key:'new-' + crypto.randomUUID(), name:'', quantity:'1', unit:'шт', mode:'route', nmck:'', material:'', application:'', logistics:'', group:'', cost_entry:'total', total:'', components:[]};
   }
   function find(key) {
     for (const row of draft.items) {
@@ -51,6 +89,11 @@
     if (!draft || !input) return;
     const rowNode = input.closest('[data-edit-key]');
     find(rowNode.dataset.editKey)[input.dataset.field] = input.value;
+    if (input.dataset.field === 'cost_entry') {
+      const priceNode = input.closest('.ts-product-edit-price');
+      priceNode.querySelector('[data-manual-total]').hidden = input.value !== 'total';
+      priceNode.querySelector('[data-manual-parts]').hidden = input.value !== 'parts';
+    }
     if (input.dataset.field === 'mode') {
       const priceNode = input.closest('.ts-product-edit-price');
       priceNode.querySelector('[data-manual-price]').hidden = input.value !== 'manual';
@@ -85,7 +128,9 @@
         const response = await fetch(editor.dataset.saveUrl, {method:'POST', headers:{'Content-Type':'application/json', 'X-CSRFToken':document.querySelector('[name="csrfmiddlewaretoken"]').value}, body:JSON.stringify(draft)});
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'Не удалось сохранить товары.');
+        original = data;
         draft = null;
+        root.querySelector('#ts-product-editor-data').textContent = JSON.stringify(data);
         const url = new URL(location.href); url.searchParams.set('analysis_snapshot', '1'); url.searchParams.set('full_card', '1');
         const fresh = await fetch(url, {cache:'no-store'});
         if (!fresh.ok || fresh.redirected) throw new Error('Товары сохранены. Перезагрузите карточку для просмотра.');
@@ -100,7 +145,10 @@
         });
         editor = root.querySelector('[data-product-editor]'); status('Сохранено');
         document.dispatchEvent(new CustomEvent('ps-card-snapshot', {detail:{document:documentSnapshot}}));
-      } catch (error) { status(error.message); }
+      } catch (error) {
+        if (!draft) toggle(false);
+        status(draft ? error.message : 'Товары сохранены. Обновите страницу для просмотра.');
+      }
       finally { saving = false; editor.querySelectorAll('button,input,select').forEach(node => node.disabled = false); }
     }
   });
@@ -108,9 +156,15 @@
     if (!dirty() && !saving) return;
     event.preventDefault(); event.returnValue = '';
   });
+  window.psConfirmProductLeave = () => {
+    if (saving) { alert('Дождитесь завершения сохранения.'); return false; }
+    if (!dirty()) return true;
+    if (!confirm('Есть несохранённые изменения. Выйти и отменить их?')) return false;
+    return true;
+  };
   document.addEventListener('click', event => {
     if (!dirty() || !event.target.closest('a[href],[role="tab"],[data-workspace-close]')) return;
-    if (!confirm('Есть несохранённые изменения. Выйти и отменить их?')) {
+    if (!window.psConfirmProductLeave()) {
       event.preventDefault(); event.stopImmediatePropagation();
     } else cancel();
   }, true);

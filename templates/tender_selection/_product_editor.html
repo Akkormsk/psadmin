@@ -1,3 +1,4 @@
+{% if product_editor_error %}<p class="ts-warn" role="status">{{ product_editor_error }}</p>{% endif %}
 {% if product_editor %}
 {{ product_editor|json_script:"ts-product-editor-data" }}
 <section data-product-editor data-save-url="{% url 'tender_selection:save_products' tender.pk %}">

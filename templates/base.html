@@ -681,7 +681,7 @@
                 crumb.type = "button";
                 crumb.addEventListener("click", function () {
                   const distance = layers.length - trailIndex - 1;
-                  removeToDepth(trailIndex + 1);
+                  if (removeToDepth(trailIndex + 1) === false) return;
                   if (historyEnabled) browserHistory.go(-distance);
                 });
               }
@@ -698,6 +698,11 @@
         }
 
         function removeToDepth(depth) {
+          for (const layer of layers.slice(depth)) {
+            try {
+              if (layer.frame.contentWindow.psConfirmProductLeave && !layer.frame.contentWindow.psConfirmProductLeave()) return false;
+            } catch (error) {}
+          }
           while (layers.length > depth) layers.pop().element.remove();
           renderStack();
           if (refreshAfterBack && layers.length) {
@@ -761,14 +766,14 @@
             if (!layers.length) return;
             refreshAfterBack = Boolean(refresh);
             const reloadRoot = refreshAfterBack && layers.length === 1;
-            removeToDepth(layers.length - 1);
+            if (removeToDepth(layers.length - 1) === false) { refreshAfterBack = false; return; }
             // A concurrent history traversal cancels the collection reload.
             if (historyEnabled && !reloadRoot) browserHistory.back();
           },
           closeAll: function () {
             if (!layers.length) return;
             const distance = layers.length;
-            removeToDepth(0);
+            if (removeToDepth(0) === false) return;
             if (historyEnabled) browserHistory.go(-distance);
           },
           depth: function () { return layers.length; },
@@ -798,7 +803,9 @@
         });
         if (historyEnabled) {
           window.addEventListener("popstate", function (event) {
-            removeToDepth(Math.min(layers.length, Number(event.state?.psWorkspaceDepth || 0)));
+            if (removeToDepth(Math.min(layers.length, Number(event.state?.psWorkspaceDepth || 0))) === false) {
+              browserHistory.pushState({...browserHistory.state, psWorkspaceDepth:layers.length}, "", location.href);
+            }
           });
         }
         document.addEventListener("keydown", function (event) {
