@@ -554,8 +554,8 @@ def tender_detail(request, pk):
     from tenders.document_enrichment import characteristic_display, item_name_parts, effective_item_requirements, is_item_enrichment, merge_item_requirements, notification_origin, notification_quote_source
     notification_by_index = {index: item for index, item in enumerate((card or {}).get("items", []))}
     source_financials = []
-    from tenders.document_enrichment import document_proposal_changes
-    document_proposals = [item for item in v2_source_items if item.source_type == "document_proposal" and document_proposal_changes(item)]
+    from tenders.document_enrichment import document_proposal_changes, reviewable_document_proposals
+    document_proposals = [] if analysis_status.processing else reviewable_document_proposals(v2_source_items)
     document_proposal_groups = []
     proposal_documents = {doc.get("url"): doc for doc in (card or {}).get("documents", [])}
     proposals_by_parent = {}

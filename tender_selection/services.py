@@ -1971,8 +1971,6 @@ def _ensure_document_review_ready(tender):
     status = resolve_tender_analysis_status(tender)
     if status.processing:
         raise ValueError("Сверка ТЗ ещё выполняется; дождитесь её завершения")
-    if status.code == "ANALYSIS_INCOMPLETE":
-        raise ValueError("Сверка ТЗ не завершена; исправьте ошибку анализа до согласования правок")
 
 
 @transaction.atomic
@@ -1993,14 +1991,10 @@ def decide_document_proposals(user, tender_id, parent_id, decision, *, schedule_
     proposals = list(TenderSourceItem.objects.filter(
         tender_id=tender_id, parent=parent, source_type="document_proposal",
     ))
-    from tenders.document_enrichment import document_proposal_changes
-    proposals = [item for item in proposals if document_proposal_changes(item)]
+    from tenders.document_enrichment import reviewable_document_proposals
+    proposals = reviewable_document_proposals(proposals)
     if not proposals:
         raise ValueError("Предложения из документации не найдены")
-    if decision == 'accept' and any(document_proposal_changes(item).get('error') for item in proposals):
-        raise ValueError('Не удалось связать предложения с принятыми товарами. Повторите «Обновить».')
-    if any(item.metadata.get("analysis_incomplete") for item in proposals):
-        raise ValueError("Сверка ТЗ ещё не завершена; предварительные изменения нельзя согласовать")
     from tenders.models import TenderComputeJob
     verified_job = TenderComputeJob.objects.filter(tender_id=tender_id).order_by('-pk').first()
     if not (verified_job and verified_job.diagnostics.get('document_input_fingerprint') == _document_input_fingerprint(parent.tender)):
@@ -2174,7 +2168,7 @@ def _publish_intake(job):
     job.save(update_fields=['diagnostics', 'updated_at'])
 
 
-def _save_intake_proposals(job, result, *, incomplete):
+def _save_intake_proposals(job, result, *, incomplete, verified_parent_ids=None):
     from tenders.models import TenderSourceItem
     result['created'] = [item for item in result['created'] if not item.is_active and item.source_type not in {'document_extraction', 'document_enrichment'}]
     ids = [item.pk for item in result['created']]
@@ -2192,7 +2186,7 @@ def _save_intake_proposals(job, result, *, incomplete):
                 prior.save(update_fields=["source_type", "metadata"])
         for item in result['created']:
             item.source_type = 'document_proposal'
-            item.metadata = {**item.metadata, 'analysis_incomplete': incomplete, 'analysis_job_id': job.pk}
+            item.metadata = {**item.metadata, 'analysis_incomplete': incomplete and (verified_parent_ids is None or item.parent_id not in verified_parent_ids), 'analysis_job_id': job.pk}
             item.save(update_fields=['source_type', 'metadata'])
     job.diagnostics['proposal_ids'] = ids
 
@@ -2501,7 +2495,13 @@ def _staged_document_analysis(job, enricher):
     result = enrich_suspicious_tender(job.tender, assess_quality(job.tender, sources), enricher)
     if result['state'] in {'validation_failure', 'system_extraction_failure'}:
         raise ValueError('ТЗ не прошло проверку: ' + str(enricher.diagnostics.get('final_failure_reason') or result['state']))
-    _save_intake_proposals(job, result, incomplete=bool(job.diagnostics.get('analysis_gaps')))
+    gaps = job.diagnostics.get('analysis_gaps', [])
+    blocked_keys = {gap.get('key') for gap in gaps if gap.get('stage') in {'tz', 'national_regime'} and gap.get('key') and gap.get('affects_specification') is not False}
+    blocked_parents = {gap.get('source_id') for gap in gaps if gap.get('stage') == 'structure'}
+    verified_parent_ids = {good['source_id'] for good in goods if good['kind'] != 'unclear'}
+    verified_parent_ids -= {good['source_id'] for good in goods if good['key'] in blocked_keys or good['kind'] == 'unclear'}
+    verified_parent_ids -= blocked_parents
+    _save_intake_proposals(job, result, incomplete=bool(gaps), verified_parent_ids=verified_parent_ids)
     if stages['structure'].get('outcome') == 'source_only' and not result['created']:
         result['state'] = 'structure_incomplete'
     job.diagnostics.update(enrichment_state=result['state'], staged_input_fingerprint=fingerprint,
@@ -2741,8 +2741,8 @@ def decide_all_document_proposals(user, tender_id, decision, proposal_ids):
     if not isinstance(proposal_ids, list) or not proposal_ids or any(type(value) is not int or value <= 0 for value in proposal_ids) or len(set(proposal_ids)) != len(proposal_ids):
         raise ValueError('Нужно передать проверенный список предложений')
     pending = list(TenderSourceItem.objects.select_for_update().filter(tender_id=tender_id, source_type='document_proposal').order_by('pk'))
-    from tenders.document_enrichment import document_proposal_changes
-    pending = [item for item in pending if document_proposal_changes(item)]
+    from tenders.document_enrichment import reviewable_document_proposals
+    pending = reviewable_document_proposals(pending)
     if not pending or {item.pk for item in pending} != set(proposal_ids):
         raise ValueError('Предложения изменились; обновите карточку перед принятием')
     if decision not in {'accept', 'reject'}:

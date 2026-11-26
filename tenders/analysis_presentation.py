@@ -267,6 +267,23 @@ def _status_for(tender, job, question_count: int, has_enriched_items: bool, pend
     labels = {'notification': 'Извещение', 'documents': 'Документы', 'structure': 'Состав', 'national_regime': '1875', 'tz': 'ТЗ', 'routing': 'Маршруты'}
     ledger = (job.diagnostics or {}).get('stages', {}) if job else {}
     progress['steps'] = [{'id': key, 'label': title, 'state': ledger.get(key, {}).get('state', 'pending'), 'seconds': round(ledger[key]['duration_ms']/1000, 1) if ledger.get(key, {}).get('duration_ms') is not None else None, 'reused': bool(ledger.get(key, {}).get('reused_from'))} for key, title in labels.items()]
+    stage_errors = {}
+    for gap in (job.diagnostics or {}).get('analysis_gaps', []) if job else []:
+        raw_stage = gap.get('stage')
+        stage = 'documents' if raw_stage in {'source_reading', 'source_binding'} else raw_stage
+        reason = gap.get('reason')
+        if reason:
+            detail = ': '.join(filter(None, [str(gap.get('name') or gap.get('item_name') or ''), str(reason)]))
+            stage_errors.setdefault(stage, []).append(detail)
+    for step in progress['steps']:
+        errors = stage_errors.get(step['id'], [])
+        entry = ledger.get(step['id'], {})
+        if step['state'] in {'failed', 'warning', 'waiting_budget'} and not errors:
+            reason = entry.get('warning') or entry.get('error') or (job.error or {}).get('message')
+            errors = [str(reason)] if reason else ['Причина не сохранена в диагностике.']
+        step['error'] = '\n'.join(dict.fromkeys(errors))[:1600]
+        if errors and step['state'] in {'complete', 'waiting_budget', 'partial'}:
+            step['state'] = 'warning'
     gap_stages = {gap.get('stage') for gap in (job.diagnostics or {}).get('analysis_gaps', [])
                   if gap.get('affects_specification') is not False} if job else set()
     for step in progress['steps']:
@@ -300,8 +317,8 @@ def resolve_tender_analysis_statuses(tenders) -> dict[int, TenderAnalysisStatus]
         if document_item_has_change(item)
     }
     enriched_ids.update(TenderCommercialItem.objects.filter(tender_id__in=ids, structure=TenderCommercialItem.Structure.COMPOSITE, status="active").values_list("tender_id", flat=True))
-    from .document_enrichment import document_proposal_changes
-    pending = Counter(item.tender_id for item in TenderSourceItem.objects.filter(tender_id__in=ids, source_type="document_proposal", is_active=False).select_related("parent") if document_proposal_changes(item))
+    from .document_enrichment import reviewable_document_proposals
+    pending = Counter(item.tender_id for item in reviewable_document_proposals(TenderSourceItem.objects.filter(tender_id__in=ids, source_type="document_proposal", is_active=False).select_related("parent")))
     return {tender.pk: _status_for(tender, jobs.get(tender.pk), counts[tender.pk], tender.pk in enriched_ids, pending[tender.pk]) for tender in tenders}
 
 

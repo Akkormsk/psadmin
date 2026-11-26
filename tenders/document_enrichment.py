@@ -443,3 +443,36 @@ def document_proposal_changes(item):
     if national.get("status") not in (None, "unknown") and national.get("basis") and national != previous:
         changes["national_regime"] = national
     return changes if any(changes.values()) or metadata.get("review_group_changed") else {}
+
+
+def reviewable_document_proposals(items):
+    """Return only complete replacement groups that pass the acceptance preconditions."""
+    from collections import defaultdict
+    groups = defaultdict(list)
+    for item in items:
+        if item.source_type == 'document_proposal' and not item.is_active:
+            groups[item.parent_id].append(item)
+    ready = []
+    for parent_id, proposals in groups.items():
+        if not parent_id or any((p.metadata or {}).get('analysis_incomplete') for p in proposals):
+            continue
+        parent = proposals[0].parent
+        changes = [document_proposal_changes(p) for p in proposals]
+        if not all(changes) or any(c.get('error') for c in changes):
+            continue
+        if len(proposals) > 1 and any(is_item_enrichment(p) for p in proposals):
+            continue
+        replacement_ids = (proposals[0].metadata or {}).get('replaces_source_ids', [])
+        if any((p.metadata or {}).get('replaces_source_ids', []) != replacement_ids for p in proposals):
+            continue
+        if replacement_ids:
+            from .models import TenderSourceItem
+            actual = set(TenderSourceItem.objects.filter(tender_id=parent.tender_id, parent=parent, is_active=True, metadata__relationship='component').values_list('pk', flat=True))
+            if parent.is_active or set(replacement_ids) != actual:
+                continue
+        elif not parent.is_active:
+            continue
+        if any((p.metadata or {}).get('relationship') == 'component' and component_total_quantity(parent.quantity, p.metadata.get('quantity_per_parent')) is None for p in proposals):
+            continue
+        ready.extend(proposals)
+    return ready
