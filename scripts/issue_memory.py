@@ -46,7 +46,7 @@ def validate(data, repo):
         raise ValueError("A defect must have verified evidence")
     if not re.fullmatch(r"https://github\.com/" + re.escape(repo) +
                         r"/actions/runs/[0-9]+(?:/job/[0-9]+)?", data["evidence_url"]):
-        raise ValueError("Link to a successful reviewed diagnostic/test run in this repository")
+        raise ValueError("Link to a completed reviewed diagnostic/test run in this repository")
     if data["review"] != "manual" and not TEST.fullmatch(data["review"]):
         raise ValueError("Review must be manual or one fully qualified regression test")
     if data.get("confirmed") is not True:
@@ -133,6 +133,8 @@ def review_plan(repo):
                     and isinstance(test, str) and TEST.fullmatch(test))
         output.append({"number": row["number"], "key": keys[0] if len(keys) == 1 else None,
                        "test": test if eligible else None,
+                       "revision": row.get("updated_at"),
+                       "events": sorted(set(EVENT_MARK.findall(body))),
                        "state": "eligible" if eligible else "manual_or_unverified"})
     return output
 
@@ -143,7 +145,8 @@ def review(repo, sha, evidence, results):
     plan = {row["number"]: row for row in review_plan(repo)}
     for result in results:
         item = plan.get(result["number"])
-        if not item or item["test"] is None or item["test"] != result.get("test"):
+        if (not item or item["test"] is None or item["test"] != result.get("test")
+                or item["revision"] != result.get("revision") or item["events"] != result.get("events")):
             continue
         if result.get("status") != "pass":
             print(f'Issue #{item["number"]}: remains open')
