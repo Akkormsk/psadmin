@@ -446,3 +446,20 @@ body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel { pad
   .ts-product-calculation .training-route__step > summary .ts-route-step-price { grid-row:2; grid-column:2; margin:0; text-align:left; }
   .ts-product-calculation .training-route__step > summary::after { grid-row:1; grid-column:3; }
 }
+
+/* Document review: one compact comparison per source position. */
+.ts-review-overview { margin-top:12px; }
+.ts-review-overview > summary { cursor:pointer; font-weight:600; }
+.ts-review-group { margin:12px 0; padding:12px; border:1px solid var(--separator); border-radius:var(--radius-md); background:var(--surface); }
+.ts-review-group h4 { margin:0 0 10px; }
+.ts-review-before { display:grid; gap:4px; padding:8px 0; border-bottom:1px solid var(--separator); }
+.ts-review-after { padding-top:8px; }
+.ts-review-group small,.ts-review-diff small { display:block; color:var(--ink-3); font-size:11px; font-weight:600; }
+.ts-review-item { padding:8px 0; }
+.ts-review-item + .ts-review-item { border-top:1px solid var(--separator); }
+.ts-review-diff { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:8px; }
+.ts-review-diff > div { padding:8px; background:var(--tint-neutral); border-radius:8px; overflow-wrap:anywhere; }
+.ts-review-diff p { margin:5px 0; font-size:13px; }
+.ts-product-edit-toolbar { display:flex; justify-content:flex-end; align-items:center; flex-wrap:wrap; gap:8px; }
+.ts-product-edit-toolbar [data-product-edit-status] { order:-1; margin-right:auto; }
+@media(max-width:650px) { .ts-review-diff { grid-template-columns:1fr; } }

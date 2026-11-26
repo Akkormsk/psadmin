@@ -4,28 +4,18 @@
     <div id="tender-items"></div>
     {% if document_proposal_groups %}
     <section class="ts-document-proposals">
-      <h3>Правки ТЗ</h3>
-      <p class="ts-sub" role="status">Предложений: {{ document_proposal_ids|length }} · {% if analysis_status.processing or document_review_needs_refresh or document_proposals_incomplete or analysis_status.code == "ANALYSIS_INCOMPLETE" %}Приёмка недоступна{% else %}Готовы к приёмке{% endif %}</p>
-      {% if analysis_status.code == "ANALYSIS_INCOMPLETE" %}<p class="ts-sub">Показаны предложения предыдущего разбора. Новый разбор не завершён.</p>{% endif %}
-      {% if analysis_status.processing %}
-      <p class="ts-sub">Дождитесь окончания сверки ТЗ.</p>
-      {% elif document_proposals_incomplete or analysis_status.code == "ANALYSIS_INCOMPLETE" %}
-      <p class="ts-warn">Сверка ТЗ не завершена. Проверьте причину ошибки и повторите «Обновить».</p>
-      {% elif document_review_needs_refresh %}
-      <p class="ts-warn">Не удалось сопоставить предложения с принятыми товарами. Нажмите «Обновить» для повторной сверки.</p>
+      <h3>Правки ТЗ <small class="ts-sub">· {{ document_proposal_ids|length }}</small></h3>
       {% if request.user.is_superuser %}
-      <form class="ts-document-proposal__actions" data-document-review-actions method="post" action="{% url 'tender_selection:all_document_proposals_action' tender.pk %}{% if request.GET.workspace %}?workspace=1{% endif %}">{% csrf_token %}<input type="hidden" name="proposal_ids" value="{{ document_proposal_ids|join:',' }}"><button class="button-secondary" name="action" value="reject">Отклонить все</button></form>
-      {% endif %}
-      {% elif request.user.is_superuser %}
       <form class="ts-document-proposal__actions" data-document-review-actions method="post" action="{% url 'tender_selection:all_document_proposals_action' tender.pk %}{% if request.GET.workspace %}?workspace=1{% endif %}">{% csrf_token %}<input type="hidden" name="proposal_ids" value="{{ document_proposal_ids|join:',' }}"><button class="button-success" name="action" value="accept">Принять все правки</button><button class="button-secondary" name="action" value="reject">Отклонить все</button></form>
       {% endif %}
-      <details class="ts-review-facts"><summary>Посмотреть правки по товарам</summary>
+      <details class="ts-review-facts ts-review-overview"><summary>Посмотреть правки по товарам</summary>
       {% for proposal_group in document_proposal_groups %}
-      <section class="ts-document-proposal ts-review-changes" aria-label="{{ proposal_group.display_name }}">
-        <div class="ts-group-head"><strong>{{ proposal_group.display_name }}</strong>{% if proposal_group.is_kit %}<span class="ts-sub">{{ proposal_group.parent_quantity|floatformat:"-2" }} {{ proposal_group.parent_unit }} · {{ proposal_group.original_values.price|rub_precise }} за набор · {{ proposal_group.original_values.sum|rub_precise }} всего</span>{% endif %}</div>
-        {% for proposal in proposal_group.items %}
-          {% include "tender_selection/_document_proposal.html" %}
-        {% endfor %}
+      <section class="ts-review-group" aria-label="{{ proposal_group.display_name }}">
+        <h4>{{ proposal_group.display_name }}</h4>
+        <div class="ts-review-before"><small>Было</small><strong>{{ proposal_group.parent.original_text }}</strong><span>{{ proposal_group.parent_quantity|floatformat:"-2" }} {{ proposal_group.parent_unit }}{% if proposal_group.is_kit %} · {{ proposal_group.original_values.price|rub_precise }} за набор · {{ proposal_group.original_values.sum|rub_precise }} всего{% endif %}</span></div>
+        <div class="ts-review-after"><small>Стало</small>
+        {% for proposal in proposal_group.items %}{% include "tender_selection/_document_proposal.html" %}{% endfor %}
+        </div>
       </section>
       {% endfor %}
       </details>
