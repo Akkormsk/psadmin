@@ -235,6 +235,14 @@ class InlineDocumentVisionTests(TestCase):
         self.assertEqual(considered[0]['reading_status'], 'partial')
         self.assertTrue(considered[0]['warnings'])
 
+    def test_picture_keeps_its_table_row_context_for_product_binding(self):
+        html = f'<table><tr><th>Товар</th><th>Вид</th></tr><tr><td>Блокнот</td><td><img src="{self.image_url}"></td></tr></table>'
+        DocumentPreview.objects.filter(url=self.documents[0]['url']).update(html=html)
+        available, _ = GatewayDocumentEnricher()._bounded_documents(self.documents, compact=True)
+        self.assertEqual(available[0]['image_contexts'], [{
+            'table': 1, 'row': 2, 'nearby_cells': ['Блокнот', ''],
+        }])
+
 
 class StagedTableEvidenceTests(SimpleTestCase):
     def test_row_evidence_preserves_values_and_rejects_cross_row_or_reordered_cells(self):

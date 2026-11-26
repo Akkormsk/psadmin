@@ -86,8 +86,10 @@ def inspect_card_routes(tender):
             'gaps': diagnostics.get('analysis_gaps'),
             'reading': {key: (diagnostics.get('source_reading') or {}).get(key) for key in ('read', 'total', 'complete')},
         } if job else None,
-        'saved_routes': [{'source_id': source_id, 'state': route['state'], 'plan_id': route['plan_id'],
-                          'steps': len(route['steps'])} for source_id, route in routes.items()]}
+        'saved_routes': [{'source_id': source_id, 'name': route['name'], 'state': route['state'],
+                          'plan_id': route['plan_id'], 'steps': len(route['steps']),
+                          'reason': route['reason'], 'missing_inputs': route['missing_inputs']}
+                         for source_id, route in routes.items()]}
 
 
 
@@ -268,6 +270,55 @@ def replay_saved_binding(tender):
     evidence.job, evidence.memory, evidence.using, evidence.links = job, memory, using, links
     evidence.reload()
     evidence.restore()
+    image_blocks = []
+    for block in memory.blocks.values():
+        if not block.get('image_index'):
+            continue
+        key = memory.key(block['id'], memory.page_keys[0])
+        row = memory.records.get(key) or {}
+        image_blocks.append({
+            'doc_id': block.get('doc_id'), 'location': block.get('location'),
+            'occurrences': [entry.get('location') for entry in block.get('occurrences', [])],
+            'read': bool(row), 'scope': row.get('scope'),
+            'fact_count': len(row.get('facts') or []), 'purposes': row.get('purposes'),
+            'reason': row.get('reason'),
+            'assigned': key in memory.assignments,
+        })
+    import base64
+    import io
+    from PIL import Image
+    image_metrics = {}
+    for index, data_url in enumerate(engine.document_images, 1):
+        raw = base64.b64decode(data_url.split(',', 1)[1])
+        with Image.open(io.BytesIO(raw)) as image:
+            image_metrics[index] = {'width': image.width, 'height': image.height,
+                                    'format': image.format, 'bytes': len(raw)}
+    image_documents = [
+        {'doc_id': doc_id, 'name': document.get('name'),
+         'images': [{'index': index, **image_metrics[index]}
+                    for index in document.get('image_indexes', [])]}
+        for doc_id, document in engine.document_lookup.items()
+        if document.get('image_indexes')
+    ]
+    import re
+    from lxml import html as html_parser
+    labels = {row['source_id']: row['label'] for row in inventory}
+    image_contexts = []
+    for doc_id, document in engine.document_lookup.items():
+        link = evidence.links.get(doc_id)
+        preview = evidence.previews.get(link.preview_id) if link else None
+        root = html_parser.fragment_fromstring((preview.html if preview else '') or '<div/>', create_parent='div')
+        embedded = [node for node in root.xpath('.//img') if str(node.get('src') or '').startswith('data:image/')]
+        for index, node in zip(document.get('image_indexes', []), embedded):
+            containers = node.xpath('ancestor::tr[1] | ancestor::p[1]')
+            nearby = containers[0] if containers else node.getparent()
+            text = ' '.join(' '.join(nearby.itertext()).split()) if nearby is not None else ''
+            tokens = set(re.findall(r'[0-9A-Za-zА-Яа-яЁё]+', text.casefold()))
+            matched = [source_id for source_id, label in labels.items()
+                       if set(re.findall(r'[0-9A-Za-zА-Яа-яЁё]+', label.casefold())) & tokens]
+            image_contexts.append({'doc_id': doc_id, 'image_index': index,
+                                   'container': nearby.tag if nearby is not None else '',
+                                   'context_characters': len(text), 'matched_source_ids': matched})
     memory.assignments = {}
     stages, singular, empty_unassigned, errors = [], 0, 0, []
     for name, stage in (diagnostics.get('stages') or {}).items():
@@ -297,6 +348,8 @@ def replay_saved_binding(tender):
             'stages': stages, 'accepted': len(assignments), 'pending': len(memory.pending_assignments()),
             'singular_source_id_rows': singular, 'empty_purpose_unassigned_rows': empty_unassigned,
             'assigned_source_ids': sorted(source_ids), 'errors': errors,
+            'image_documents': image_documents, 'image_blocks': image_blocks,
+            'image_contexts': image_contexts,
             'accepted_ids_match_requested_blocks': all(row.get('id') in memory.blocks for row in assignments),
             'routes_not_created': True, 'model_called': False}
 

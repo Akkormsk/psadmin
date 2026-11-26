@@ -593,6 +593,52 @@ class ItemBindingResumeTests(TestCase):
         with patch('tenders.services._ai_gateway_json', side_effect=answer):
             engine.bind_source_memory(job)
 
+    def test_visual_fragment_is_sent_again_when_binding_it_to_a_product(self):
+        import base64
+        import io
+        from PIL import Image
+
+        image = io.BytesIO()
+        Image.new('RGB', (96, 134), 'white').save(image, format='JPEG')
+        image_url = 'data:image/jpeg;base64,' + base64.b64encode(image.getvalue()).decode()
+        engine = self.engine()
+        document = engine.document_lookup[1]
+        document['image_indexes'] = [1]
+        document['image_contexts'] = [{'table': 1, 'row': 2,
+                                       'nearby_cells': ['Блокнот', 'Синяя обложка']}]
+        engine.document_images = engine.all_document_images = [image_url]
+        memory = SourceMemory(document_blocks(engine.document_lookup, [image_url]),
+                              [{'source_id': self.source.pk, 'label': self.source.original_text}], 'model')
+        blocks = list(memory.blocks.values())
+        rows = []
+        for block in blocks:
+            rows.append({'id': block['id'], 'scope': 'unassigned', 'source_ids': [],
+                         'facts': [{'quote': 'Мелкая фотография товара'}] if block.get('image_index')
+                                  else [{'quote': block['text']}]})
+        memory.save(rows, blocks, memory.pages[0], memory.page_keys[0])
+        engine.source_memory = memory
+
+        visual_calls = []
+        def answer(prompt, **kwargs):
+            task = json.loads(prompt.rsplit('\n', 1)[1])
+            visual = [block for block in task['blocks'] if block.get('image_index')]
+            if visual:
+                visual_calls.append(visual)
+                self.assertEqual(visual[0]['structure']['nearby_cells'], ['Блокнот', 'Синяя обложка'])
+                self.assertEqual(kwargs['image_data_urls'], [image_url])
+                self.assertEqual(kwargs['image_labels'], [1])
+            else:
+                self.assertEqual(kwargs['image_data_urls'], [])
+            return {'items': [{'ids': [block['id']], 'scope': 'item',
+                               'source_ids': [self.source.pk], 'purposes': ['tz']}
+                              for block in task['blocks']]}, {}
+
+        job = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
+        with patch('tenders.services._ai_gateway_json', side_effect=answer):
+            engine.bind_source_memory(job)
+        self.assertEqual(len(visual_calls), 1)
+        self.assertEqual(job.diagnostics['stages']['source_binding']['state'], 'complete')
+
     def test_saved_binding_formats_persist_unresolved_facts_without_paid_repeat(self):
         engine = self.prepared()
         job = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
