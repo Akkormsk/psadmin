@@ -1,5 +1,11 @@
 name: Collect issue memory evidence
 on:
+  workflow_dispatch:
+    inputs:
+      defect_json:
+        description: 'Reviewed defect registration JSON; use stable cause key and event ID'
+        required: true
+        type: string
   workflow_run:
     workflows:
       - Deploy test VDS
@@ -10,7 +16,29 @@ permissions:
   actions: read
   contents: read
 jobs:
+  register:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    concurrency:
+      group: psadmin-issue-memory-writer
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Register reviewed defect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PSADMIN_ISSUE_MEMORY_WRITER: '1'
+          DEFECT_JSON: ${{ inputs.defect_json }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$DEFECT_JSON" > "$RUNNER_TEMP/defect.json"
+          python scripts/issue_memory.py register --data "$RUNNER_TEMP/defect.json"
   collect:
+    if: github.event_name == 'workflow_run'
     runs-on: ubuntu-22.04
     steps:
       - name: Save run evidence for review
