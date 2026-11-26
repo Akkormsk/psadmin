@@ -2910,6 +2910,18 @@ def source_route_snapshots(tender, sources=None):
         current = bool(plan and plan.status in {"planned", "ready", "needs_review"} and (plan.status == "needs_review" or plan.steps.all()) and plan.metadata.get("input_fingerprint") == source_route_fingerprint(source, processes, knowledge, answers[source.pk]))
         state = ("needs_review" if plan.status == "needs_review" else "ready") if current else "building" if active else "stale" if plan else "pending"
         steps = [{"id": step.pk, "process_id": step.process_id, "name": step.process.name, "description": step.process.description, "details": step.details, "position": step.position} for step in sorted(plan.steps.all(), key=lambda step: step.position)] if plan else []
+        if current and plan and plan.component_id:
+            from .product_editing import manual_step_prices
+            subject = plan.commercial_item if plan.commercial_item.structure == TenderCommercialItem.Structure.SIMPLE else plan.component
+            quantity = source.quantity
+            if quantity is not None and quantity > 0:
+                prices = manual_step_prices(plan, subject, quantity)
+                for step in steps:
+                    price = prices.get(str(step['id']))
+                    if price:
+                        step['manual_price'] = price
+                        step['price_unit'] = str(Decimal(price['amount_total']) / quantity)
+                    step['price_quantity'] = quantity
         interaction = interactions.get(source.pk)
         from django.urls import reverse
         choice = {"question": interaction.question, "selected": plan.metadata.get("selected_choice", ""), "options": interaction.possible_answers.get("options", []), "url": reverse("tender_selection:owner_interaction_answer", args=[tender.pk, interaction.pk])} if interaction and current else None

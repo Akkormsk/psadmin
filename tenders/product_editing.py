@@ -224,6 +224,8 @@ def _route_price(good, previous, unchanged):
         edit = previous.requirements.get('card_edit', {})
         if edit.get('route_price'):
             return edit['route_price']
+        if edit.get('mode') == 'manual' or not previous.requirements.get('production'):
+            return {'values': {}, 'known': False, 'basis': None, 'requirements': {}}
         from .product_financials import _cost_complete
         old_values = {field + '_unit': getattr(previous, field + '_unit') for field in COST_FIELDS}
         complete = _cost_complete({'name': previous.name, 'quantity': previous.quantity, 'requirements': previous.requirements, **old_values})
@@ -235,7 +237,7 @@ def _route_price(good, previous, unchanged):
 
 
 @transaction.atomic
-def save_products(user, tender_id, state, *, route_updates=None):
+def save_products(user, tender_id, state, *, route_updates=None, route_only=False):
     if not user.is_superuser:
         raise PermissionDenied
     tender = Tender.objects.select_for_update().get(pk=tender_id)
@@ -245,7 +247,23 @@ def save_products(user, tender_id, state, *, route_updates=None):
     current = product_editor(tender)
     if not isinstance(state, dict) or state.get('revision') != current['revision']:
         raise ValueError('Товары или расчёт изменились. Откройте редактирование заново.')
-    rows = state.get('items')
+    rows = deepcopy(state.get('items'))
+    if route_only and isinstance(rows, list):
+        def normalize(row, old):
+            if not isinstance(row, dict):
+                raise ValueError('Некорректная позиция.')
+            if row.get('nmck', '') != old.get('nmck', ''):
+                raise ValueError('НМЦК берётся из извещения.')
+            # Legacy manual values remain in provenance/history, but never drive a new version.
+            row.update(mode='route', cost_entry=old.get('cost_entry', 'parts'))
+            for field in (*COST_FIELDS, 'total'):
+                row[field] = old.get(field, '')
+            children = {child['key']: child for child in old.get('components', [])}
+            for child in row.get('components', []):
+                normalize(child, children.get(child.get('key'), {}))
+        prior = {row['key']: row for row in current['items']}
+        for row in rows:
+            normalize(row, prior.get(row.get('key'), {}))
     allowed = {row['key']: row for row in current['items']}
     _validate(rows, allowed)
     for row in rows:
@@ -497,6 +515,8 @@ def save_route_prices(user, estimate, data):
         requirements = row.get('requirements')
         if not isinstance(requirements, dict) or not isinstance(requirements.get('production'), dict):
             continue
+        if line.requirements.get('production', {}).get('manual_plan_id'):
+            raise ValueError('Изменяйте цену в действующем маршруте товара.')
         if requirements['production'] == line.requirements.get('production'):
             continue
         from .product_financials import _cost_complete
@@ -511,7 +531,7 @@ def save_route_prices(user, estimate, data):
                                            'known': complete, 'requirements': {'production': deepcopy(production)}}
     if not updates:
         return estimate
-    save_products(user, estimate.tender_id, product_editor(estimate.tender), route_updates=updates)
+    save_products(user, estimate.tender_id, product_editor(estimate.tender), route_updates=updates, route_only=True)
     return estimate.tender.estimates.order_by('-updated_at', '-pk').first()
 
 
@@ -555,3 +575,59 @@ def working_route_snapshot_sources(tender, sources):
         if source is not None:
             result[source.pk] = source
     return list(result.values())
+
+
+def manual_step_prices(plan, subject, quantity):
+    """Read the existing route price snapshot, never guess links to older steps."""
+    edit = (subject.provenance or {}).get('card_edit', {})
+    route = edit.get('route_price') or {}
+    production = (route.get('requirements') or {}).get('production') or {}
+    basis = component_basis(subject) if isinstance(subject, CalculationComponent) else input_basis(subject)
+    if production.get('manual_plan_id') != plan.pk or route.get('basis') != basis:
+        return {}
+    if str(production.get('quantity')) != str(quantity.normalize()):
+        return {}
+    return {str(cost['step_id']): cost for cost in production.get('costs', [])}
+
+
+@transaction.atomic
+def save_manual_step(user, tender_id, source_id, plan_id, step_id, mode, amount):
+    if not user.is_superuser:
+        raise PermissionDenied
+    tender = Tender.objects.select_for_update().get(pk=tender_id)
+    from .calculation_v2_pipeline import source_route_snapshots
+    from .models import ComponentRoutePlan
+    snapshot = source_route_snapshots(tender).get(source_id) or {}
+    if snapshot.get('state') != 'ready' or snapshot.get('plan_id') != plan_id or snapshot.get('pending_changes'):
+        raise ValueError('Маршрут изменился или не согласован. Обновите карточку.')
+    plan = ComponentRoutePlan.objects.select_for_update().select_related('commercial_item', 'component').get(pk=plan_id)
+    good = plan.commercial_item
+    if good.status != 'active' or not plan.component_id or plan.component.status != 'active':
+        raise ValueError('Товар или компонент не принят.')
+    subject = good if good.structure == TenderCommercialItem.Structure.SIMPLE else plan.component
+    quantity = good.quantity if subject == good else subject.effective_quantity
+    if quantity is None or quantity <= 0:
+        raise ValueError('Неизвестно количество товара.')
+    steps = snapshot['steps']
+    if step_id not in {step['id'] for step in steps} or mode not in ('unit', 'total'):
+        raise ValueError('Некорректный этап или способ ввода.')
+    value = _number(amount, optional=True)
+    if value is not None and value != value.quantize(Decimal('0.01')):
+        raise ValueError('Укажите цену с точностью до копейки.')
+    from .services import _money
+    from .routes import _totals_from_costs
+    costs = manual_step_prices(plan, subject, quantity)
+    if value is None:
+        costs.pop(str(step_id), None)
+    else:
+        total = _money(value * quantity if mode == 'unit' else value)
+        costs[str(step_id)] = {'step_id': step_id, 'amount_total': str(total), 'source': 'Ручной ввод',
+            'entry_mode': mode, 'entry_amount': str(value), 'actor_id': user.pk, 'at': timezone.now().isoformat()}
+    ordered = [dict(costs[str(step['id'])], process_name=step['name']) for step in steps if str(step['id']) in costs]
+    totals = _totals_from_costs(ordered, quantity)
+    production = {'stage': 'training_dialogue', 'manual_plan_id': plan.pk, 'quantity': str(quantity.normalize()),
+        'route': {'processes': steps}, 'costs': ordered, 'totals': totals}
+    key = f'good-{good.pk}' if subject == good else f'component-{subject.pk}'
+    update = {'values': {'material': totals['material_unit'], 'application': '0', 'logistics': '0'},
+        'known': len(ordered) == len(steps), 'requirements': {'production': production}}
+    return save_products(user, tender_id, product_editor(tender), route_updates={key: update}, route_only=True)

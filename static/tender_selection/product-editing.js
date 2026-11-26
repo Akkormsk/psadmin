@@ -11,31 +11,6 @@
   function field(row, name, label, numeric = false) {
     return `<label><span>${label}</span><input data-field="${name}" value="${escape(row[name])}" ${numeric ? 'inputmode="decimal"' : ''}></label>`;
   }
-  function price(row) {
-    const manual = row.mode === 'manual';
-    const total = row.cost_entry === 'total';
-    return `<div class="ts-product-edit-price">
-      <label><span>Себестоимость за единицу</span>
-        <select data-field="mode">
-          <option value="route" ${manual ? '' : 'selected'}>По маршруту</option>
-          <option value="manual" ${manual ? 'selected' : ''}>Вручную</option>
-        </select>
-      </label>
-      <div data-manual-price ${manual ? '' : 'hidden'}>
-        <label><span>Ввод цены</span><select data-field="cost_entry">
-          <option value="total" ${total ? 'selected' : ''}>Общая сумма</option>
-          <option value="parts" ${total ? '' : 'selected'}>Детализация</option>
-        </select></label>
-        <div data-manual-total ${total ? '' : 'hidden'}>${field(row, 'total', 'Себестоимость единицы, ₽', true)}</div>
-        <div data-manual-parts ${total ? 'hidden' : ''}>
-          ${field(row, 'material', 'Материал / товар, ₽', true)}
-          ${field(row, 'application', 'Нанесение / работы, ₽', true)}
-          ${field(row, 'logistics', 'Логистика на единицу, ₽', true)}
-        </div>
-      </div>
-      <small class="ts-sub" data-route-price-note ${manual ? 'hidden' : ''}>${escape(row.route_label || 'Цена появится после расчёта маршрута.')}</small>
-    </div>`;
-  }
   function rowHtml(row, child = false) {
     return `<div class="ts-product-edit-row ${child ? 'ts-product-edit-component' : ''}" data-edit-key="${escape(row.key)}">
       <div class="ts-product-edit-fields">
@@ -44,15 +19,11 @@
         ${field(row, 'unit', 'Ед.')}
         <button type="button" class="ts-quiet" data-remove-product aria-label="Исключить ${escape(row.name)}">Исключить</button>
       </div>
-      <details class="ts-product-edit-options"><summary>Цена${child ? '' : ' и состав'}</summary>
-        <div class="ts-product-edit-prices">
-          ${child ? '' : field(row, 'nmck', 'НМЦК за единицу (рабочая), ₽', true)}
-          ${price(row)}
-        </div>
-        ${child ? '' : `${field(row, 'group', 'Группа')}
-          <div data-component-rows>${(row.components || []).map(item => rowHtml(item, true)).join('')}</div>
-          <button type="button" class="ts-quiet" data-add-component>+ Добавить компонент</button>`}
-      </details>
+      ${child ? '' : `<details class="ts-product-edit-options"><summary>Состав и группа</summary>
+        ${field(row, 'group', 'Группа')}
+        <div data-component-rows>${(row.components || []).map(item => rowHtml(item, true)).join('')}</div>
+        <button type="button" class="ts-quiet" data-add-component>+ Добавить компонент</button>
+      </details>`}
     </div>`;
   }
   function render() {
@@ -169,3 +140,19 @@
     } else cancel();
   }, true);
 })();
+
+document.addEventListener('submit', async event => {
+  const form = event.target.closest('[data-manual-step-price]');
+  if (!form) return;
+  event.preventDefault();
+  const button = form.querySelector('button'), status = form.querySelector('[role="status"]');
+  const data = Object.fromEntries(new FormData(form));
+  button.disabled = true;
+  try {
+    const response = await fetch(form.action, {method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken':data.csrfmiddlewaretoken}, body:JSON.stringify(data)});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Не удалось сохранить цену.');
+    const url = new URL(location.href); url.hash = 'product-source-' + data.source_id;
+    location.href = url.href; location.reload();
+  } catch (error) { status.textContent = error.message; button.disabled = false; }
+});

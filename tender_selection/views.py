@@ -1731,7 +1731,21 @@ def save_products_action(request, pk):
     from tenders.product_editing import save_products
     try:
         state = json.loads(request.body)
-        result = save_products(request.user, pk, state)
+        result = save_products(request.user, pk, state, route_only=True)
     except (ValueError, TypeError) as exc:
         return JsonResponse({'error': str(exc)}, status=400)
     return JsonResponse(result)
+
+
+@superuser_required
+@require_POST
+def save_manual_step_action(request, pk):
+    import json
+    from tenders.product_editing import save_manual_step
+    try:
+        data = json.loads(request.body)
+        save_manual_step(request.user, pk, int(data['source_id']), int(data['plan_id']),
+                         int(data['step_id']), data['mode'], data.get('amount'))
+    except (ValueError, TypeError, KeyError) as exc:
+        return JsonResponse({'error': str(exc)}, status=400)
+    return JsonResponse({'saved': True})
