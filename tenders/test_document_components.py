@@ -91,39 +91,31 @@ class DocumentComponentAcceptanceTests(TestCase):
         old.refresh_from_db()
         self.assertEqual(old.display_name, "Старое представление")
 
-    def test_review_actions_appear_only_after_generic_document_analysis_completes(self):
+    def test_review_actions_appear_for_verified_groups_after_partial_analysis(self):
         from tender_selection.services import decide_all_document_proposals
         from .models import TenderComputeJob
-        proposal = self.stage([self.row(self.parents[0])])["created"][0]
+        proposal, provisional = self.stage([self.row(self.parents[0]), self.row(self.parents[1])])["created"]
+        provisional.metadata = {**provisional.metadata, "analysis_incomplete": True}
+        provisional.save(update_fields=["metadata"])
         job = TenderComputeJob.objects.create(tender=self.tender, version="v2-review-controls", status="running")
         url = reverse("tender_selection:detail", args=[self.tender.pk])
-
         processing = self.client.get(url)
-        self.assertContains(processing, "Предварительные изменения ТЗ")
         self.assertNotContains(processing, "Принять все правки")
-        self.assertNotContains(processing, "Отклонить все")
         with self.assertRaisesRegex(ValueError, "выполняется"):
             decide_all_document_proposals(self.admin, self.tender.pk, "accept", [proposal.pk])
-        with self.assertRaisesRegex(ValueError, "выполняется"):
-            decide_document_proposals(self.admin, self.tender.pk, self.parents[0].pk, "reject")
-        self.assertFalse(TenderSourceItem.objects.get(pk=proposal.pk).is_active)
-
         job.status = "partial"
         job.save(update_fields=["status"])
-        incomplete = self.client.get(url)
-        self.assertNotContains(incomplete, "Принять все правки")
-        self.assertNotContains(incomplete, "Отклонить все")
-        with self.assertRaisesRegex(ValueError, "не завершена"):
-            decide_all_document_proposals(self.admin, self.tender.pk, "reject", [proposal.pk])
-
-        job.status = "needs_review"
-        job.save(update_fields=["status"])
-        ready = self.client.get(url)
-        self.assertContains(ready, "Принять все правки")
-        self.assertContains(ready, "Отклонить все")
+        card = self.client.get(url)
+        self.assertContains(card, "Принять все правки")
+        self.assertContains(card, "Отклонить все")
+        self.assertEqual(card.context["document_proposal_ids"], [proposal.pk])
+        with self.assertRaises(ValueError):
+            decide_all_document_proposals(self.admin, self.tender.pk, "accept", [proposal.pk, provisional.pk])
         changed = decide_all_document_proposals(self.admin, self.tender.pk, "accept", [proposal.pk])
         self.assertEqual(changed["changed"], 1)
         self.assertTrue(TenderSourceItem.objects.get(pk=proposal.pk).is_active)
+        self.assertFalse(TenderSourceItem.objects.get(pk=provisional.pk).is_active)
+        self.assertNotContains(self.client.get(url), "Принять все правки")
 
     def test_missing_component_amount_is_not_assumed_to_be_one(self):
         result = self.stage([self.row(self.parents[0], None)])

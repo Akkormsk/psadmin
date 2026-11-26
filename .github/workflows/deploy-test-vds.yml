@@ -308,6 +308,7 @@ jobs:
             tenders.test_document_semantic_review.SemanticReviewTests \
             tender_selection.test_national_regime.ItemRiskTests \
             tenders.test_document_reading_input.InlineDocumentVisionTests.test_gateway_sends_identical_images_once_without_losing_original_reference_numbers \
+            tenders.test_document_components.DocumentComponentAcceptanceTests.test_review_actions_appear_for_verified_groups_after_partial_analysis \
             tenders.test_document_components.StagedCanonicalAcceptanceTests \
             tenders.test_document_components.IntakeProposalHistoryTests \
             tenders.test_intake_worker --noinput -v 1 </dev/null
@@ -408,7 +409,29 @@ jobs:
             if ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
               -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
               "$SSH_USER@$SSH_HOST" "cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml exec -T test-web python manage.py test '$regression' --noinput -v 2" </dev/null > "$logfile" 2>&1; then
-              if grep -Eq '^Ran 1 test in ' "$logfile" && grep -Eq '^OK[[:space:]]*
+              if grep -Eq '^Ran 1 test in ' "$logfile" && grep -Eq '^OK[[:space:]]*$' "$logfile"; then status=pass; fi
+            fi
+            python -c 'import json,sys; row=next(r for r in json.load(open(sys.argv[1])) if r["number"]==int(sys.argv[2])); print(json.dumps(dict(row,status=sys.argv[3])))' "$RUNNER_TEMP/issue-review-plan.json" "$number" "$status" >> "$RUNNER_TEMP/issue-review-results.jsonl"
+            echo "Issue #$number: $status"
+          done < "$RUNNER_TEMP/issue-review-targets.txt"
+          python - "$RUNNER_TEMP/issue-review-results.jsonl" <<'PY' > "$RUNNER_TEMP/issue-review-results.json"
+          import json, sys
+          print(json.dumps([json.loads(line) for line in open(sys.argv[1])]))
+          PY
+
+      - name: Publish issue review evidence
+        if: ${{ success() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: confirmed-issue-review
+          path: |
+            ${{ runner.temp }}/issue-review-plan.json
+            ${{ runner.temp }}/issue-review-results.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Collect diagnostics after failure
         if: ${{ failure() }}
         shell: bash
         run: |
@@ -447,127 +470,6 @@ jobs:
           results="$RUNNER_TEMP/confirmed-issue-review/issue-review-results.json"
           if [ ! -f "$results" ]; then exit 0; fi
           python scripts/issue_memory.py review --data "$results" --sha "$(git rev-parse HEAD)" --evidence-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-
-  inspect:
-    if: github.event_name == 'workflow_dispatch' && inputs.inspect_tender_number != ''
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    env:
-      SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
-      SSH_USER: deploy
-      INSPECT_NUMBER: ${{ inputs.inspect_tender_number }}
-      INSPECT_EIS: ${{ inputs.inspect_eis }}
-      INSPECT_NATIONAL_REGIME: ${{ inputs.inspect_national_regime }}
-      SOURCE_DUPLICATE_REPAIR: ${{ inputs.source_duplicate_repair }}
-      BINDING_PROBE_BUDGET_RUB: ${{ inputs.binding_probe_budget_rub }}
-      STOP_INTERRUPTED_JOB_ID: ${{ inputs.stop_interrupted_job_id }}
-      INSPECT_ORIGINAL_DOCUMENT: ${{ inputs.inspect_original_document }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Configure strict SSH
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.PSADMIN_TEST_SSH_PRIVATE_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.PSADMIN_TEST_SSH_KNOWN_HOSTS }}
-        run: |
-          set -euo pipefail
-          install -d -m 700 "$HOME/.ssh"
-          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
-          chmod 600 "$HOME/.ssh/id_ed25519"
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          chmod 600 "$HOME/.ssh/known_hosts"
-      - name: Inspect TEST data or reconcile explicitly selected duplicate sources
-        run: |
-          set -euo pipefail
-          [[ "$INSPECT_NUMBER" =~ ^[0-9]{19}$ ]]
-          [[ -z "$BINDING_PROBE_BUDGET_RUB" || "$BINDING_PROBE_BUDGET_RUB" =~ ^[0-9]+([.][0-9]+)?$ ]]
-          [[ -z "$SOURCE_DUPLICATE_REPAIR" || "$SOURCE_DUPLICATE_REPAIR" = preview || "$SOURCE_DUPLICATE_REPAIR" = apply ]]
-          [[ -z "$STOP_INTERRUPTED_JOB_ID" || "$STOP_INTERRUPTED_JOB_ID" =~ ^[0-9]+$ ]]
-          if [ -n "$STOP_INTERRUPTED_JOB_ID" ]; then
-            [[ "$INSPECT_EIS" != true && "$INSPECT_NATIONAL_REGIME" != true && -z "$SOURCE_DUPLICATE_REPAIR" && -z "$BINDING_PROBE_BUDGET_RUB" ]]
-          fi
-          inspection_script=scripts/inspect_tender_analysis.py
-          if [ "${{ inputs.inspect_route_replay && '1' || '0' }}" = 1 ]; then inspection_script=scripts/export_route_replay_readonly.py; fi
-          if [ "$INSPECT_EIS" = true ]; then inspection_script=scripts/check_eis_notification.py; fi
-          if [ "$INSPECT_NATIONAL_REGIME" = true ]; then inspection_script=scripts/inspect_national_regime.py; fi
-          if [ -n "$SOURCE_DUPLICATE_REPAIR" ]; then inspection_script=scripts/reconcile_tender_duplicates.py; fi
-          if [ -n "$STOP_INTERRUPTED_JOB_ID" ]; then inspection_script=scripts/stop_interrupted_intake.py; fi
-          inspection_code="$(base64 -w 0 "$inspection_script")"
-          route_audit_code=""
-          if [ "${{ inputs.inspect_route_history && '1' || '0' }}" = 1 ]; then
-            route_audit_code="$(base64 -w 0 scripts/audit_route_failures_readonly.py)"
-          fi
-          original_document="$(printf '%s' "$INSPECT_ORIGINAL_DOCUMENT" | base64 -w 0)"
-          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
-            "$SSH_USER@$SSH_HOST" "cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml exec -T -e INSPECT_TENDER_NUMBER=$INSPECT_NUMBER -e INSPECT_ORIGINAL_DOCUMENT_B64=$original_document -e ROUTE_AUDIT_CODE=$route_audit_code -e BINDING_PROBE_BUDGET_RUB=$BINDING_PROBE_BUDGET_RUB -e SOURCE_DUPLICATE_REPAIR=$SOURCE_DUPLICATE_REPAIR -e STOP_INTERRUPTED_JOB_ID=$STOP_INTERRUPTED_JOB_ID -e STOP_RUN_ID=${{ github.run_id }} test-web python -u -c 'import base64; exec(base64.b64decode(\"$inspection_code\"))'" </dev/null
-
-  refresh_estimates:
-    if: github.event_name == 'workflow_dispatch' && inputs.refresh_estimates != '' && github.ref == 'refs/heads/feature/m3-agent-simple'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    env:
-      SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
-      SSH_USER: deploy
-      REFRESH_MODE: ${{ inputs.refresh_estimates }}
-      REFRESH_DIGEST: ${{ inputs.refresh_estimates_digest }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Configure strict SSH
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.PSADMIN_TEST_SSH_PRIVATE_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.PSADMIN_TEST_SSH_KNOWN_HOSTS }}
-        run: |
-          set -euo pipefail
-          install -d -m 700 "$HOME/.ssh"
-          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
-          chmod 600 "$HOME/.ssh/id_ed25519"
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          chmod 600 "$HOME/.ssh/known_hosts"
-      - name: Refresh TEST estimate requirements with reviewed plan
-        run: |
-          set -euo pipefail
-          [[ "$REFRESH_MODE" = preview || "$REFRESH_MODE" = apply ]]
-          [[ -z "$REFRESH_DIGEST" || "$REFRESH_DIGEST" =~ ^[0-9a-f]{64}$ ]]
-          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
-            "$SSH_USER@$SSH_HOST" "cat /home/deploy/psadmin-test/.twin-version"
-          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
-            "$SSH_USER@$SSH_HOST" "cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml exec -T -e REFRESH_ESTIMATES_MODE=$REFRESH_MODE -e REFRESH_ESTIMATES_DIGEST=$REFRESH_DIGEST test-web python -" < scripts/sync_test_estimate_requirements.py
-
-          if [ "$REFRESH_MODE" = apply ]; then
-            ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
-              "$SSH_USER@$SSH_HOST" "cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml cp test-web:/app/private_maintenance_backups /home/deploy/psadmin-test-maintenance-backups-${{ github.run_id }}"
-          fi
- "$logfile"; then status=pass; fi
-            fi
-            python -c 'import json,sys; row=next(r for r in json.load(open(sys.argv[1])) if r["number"]==int(sys.argv[2])); print(json.dumps(dict(row,status=sys.argv[3])))' "$RUNNER_TEMP/issue-review-plan.json" "$number" "$status" >> "$RUNNER_TEMP/issue-review-results.jsonl"
-            echo "Issue #$number: $status"
-          done < "$RUNNER_TEMP/issue-review-targets.txt"
-          python - "$RUNNER_TEMP/issue-review-results.jsonl" <<'PY' > "$RUNNER_TEMP/issue-review-results.json"
-          import json, sys
-          print(json.dumps([json.loads(line) for line in open(sys.argv[1])]))
-          PY
-      - name: Publish issue review evidence
-        if: ${{ success() }}
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: confirmed-issue-review
-          path: |
-            ${{ runner.temp }}/issue-review-plan.json
-            ${{ runner.temp }}/issue-review-results.json
-          if-no-files-found: ignore
-          retention-days: 30
-
-      - name: Collect diagnostics after failure
-        if: ${{ failure() }}
-        shell: bash
-        run: |
-          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
-            "$SSH_USER@$SSH_HOST" 'docker compose -f /home/deploy/psadmin-test/deploy/vds/compose.test.yml ps; docker compose -f /home/deploy/psadmin-test/deploy/vds/compose.test.yml logs --tail 100 test-web' || true
 
   inspect:
     if: github.event_name == 'workflow_dispatch' && inputs.inspect_tender_number != ''

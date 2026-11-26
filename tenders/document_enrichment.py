@@ -472,7 +472,10 @@ def reviewable_document_proposals(items):
                 continue
         elif not parent.is_active:
             continue
-        if any((p.metadata or {}).get('relationship') == 'component' and component_total_quantity(parent.quantity, p.metadata.get('quantity_per_parent')) is None for p in proposals):
+        try:
+            if any((p.metadata or {}).get('relationship') == 'component' and component_total_quantity(parent.quantity, p.metadata.get('quantity_per_parent')) is None for p in proposals):
+                continue
+        except (ValueError, TypeError):
             continue
         ready.extend(proposals)
     return ready
