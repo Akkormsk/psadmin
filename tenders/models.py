@@ -4,6 +4,7 @@ import uuid
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.dispatch import receiver
 from django.utils import timezone
 
 
@@ -1118,13 +1119,24 @@ class ConversationAttachment(models.Model):
 class KnowledgeRecord(models.Model):
     feedback_event=models.ForeignKey(OwnerFeedbackEvent,null=True,blank=True,on_delete=models.SET_NULL); scope_type=models.CharField(max_length=64); scope_context=models.JSONField(default=dict,blank=True); applicability=models.JSONField(default=dict,blank=True); payload=models.JSONField(default=dict,blank=True); confidence=models.DecimalField(max_digits=5,decimal_places=4,null=True,blank=True); status=models.CharField(max_length=24,default="draft"); supersedes=models.ForeignKey("self",null=True,blank=True,on_delete=models.SET_NULL); created_at=models.DateTimeField(auto_now_add=True); updated_at=models.DateTimeField(auto_now=True)
 
+class Task(models.Model):
+    name = models.CharField("Название", max_length=300)
+    description = models.TextField("Описание", blank=True)
+    created_at = models.DateTimeField("Создана", auto_now_add=True)
+
+    def __str__(self):
+        return self.name
+
+
 class TenderCommercialItem(models.Model):
     class Structure(models.TextChoices):
         SIMPLE = "simple", "Simple"
         AGGREGATE = "aggregate", "Aggregate"
         COMPOSITE = "composite", "Composite"
 
-    tender = models.ForeignKey("tender_selection.Tender", on_delete=models.CASCADE, related_name="v2_commercial_items")
+    tender = models.ForeignKey("tender_selection.Tender", on_delete=models.CASCADE, related_name="v2_commercial_items", null=True, blank=True)
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="commercial_items", null=True, blank=True)
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="commercial_items", null=True, blank=True)
     job = models.ForeignKey(TenderComputeJob, null=True, blank=True, on_delete=models.SET_NULL, related_name="commercial_items")
     source_items = models.ManyToManyField(TenderSourceItem, related_name="commercial_items")
     source_key = models.CharField(max_length=160)
@@ -1139,8 +1151,55 @@ class TenderCommercialItem(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["tender", "source_key"], name="unique_v2_commercial_item")]
+        constraints = [
+            models.UniqueConstraint(fields=["tender", "source_key"], name="unique_v2_commercial_item"),
+            models.UniqueConstraint(fields=["order", "source_key"], name="unique_order_commercial_item"),
+            models.UniqueConstraint(fields=["task", "source_key"], name="unique_task_commercial_item"),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(tender__isnull=False, order__isnull=True, task__isnull=True)
+                    | models.Q(tender__isnull=True, order__isnull=False, task__isnull=True)
+                    | models.Q(tender__isnull=True, order__isnull=True, task__isnull=False)
+                ),
+                name="commercial_item_exactly_one_owner",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(tender__isnull=False) | models.Q(job__isnull=True),
+                name="commercial_item_tender_job_only",
+            ),
+        ]
         ordering = ["pk"]
+
+    def _validate_tender_links(self, using):
+        if self.job_id and (
+            not self.tender_id
+            or not TenderComputeJob.objects.using(using).filter(pk=self.job_id, tender_id=self.tender_id).exists()
+        ):
+            raise ValidationError({"job": "Задание должно принадлежать тому же тендеру."})
+        if self.pk and self.source_items.using(using).exclude(tender_id=self.tender_id).exists():
+            raise ValidationError({"source_items": "Исходные позиции должны принадлежать тому же тендеру."})
+
+    def clean(self):
+        super().clean()
+        self._validate_tender_links(self._state.db or "default")
+
+    def save(self, *args, **kwargs):
+        from django.db import router
+
+        self._validate_tender_links(kwargs.get("using") or router.db_for_write(type(self), instance=self))
+        return super().save(*args, **kwargs)
+
+
+@receiver(models.signals.m2m_changed, sender=TenderCommercialItem.source_items.through)
+def _validate_commercial_item_sources(sender, instance, action, reverse, model, pk_set, using, **kwargs):
+    if action != "pre_add" or not pk_set:
+        return
+    if reverse:
+        invalid = TenderCommercialItem.objects.using(using).filter(pk__in=pk_set).exclude(tender_id=instance.tender_id).exists()
+    else:
+        invalid = not instance.tender_id or TenderSourceItem.objects.using(using).filter(pk__in=pk_set).exclude(tender_id=instance.tender_id).exists()
+    if invalid:
+        raise ValidationError("Исходные позиции должны принадлежать тому же тендеру.")
 
 
 class CalculationComponent(models.Model):
