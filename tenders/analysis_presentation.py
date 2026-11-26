@@ -269,6 +269,8 @@ def _status_for(tender, job, question_count: int, has_enriched_items: bool, pend
     progress['steps'] = [{'id': key, 'label': title, 'state': ledger.get(key, {}).get('state', 'pending'), 'seconds': round(ledger[key]['duration_ms']/1000, 1) if ledger.get(key, {}).get('duration_ms') is not None else None, 'reused': bool(ledger.get(key, {}).get('reused_from'))} for key, title in labels.items()]
     stage_errors = {}
     for gap in (job.diagnostics or {}).get('analysis_gaps', []) if job else []:
+        if gap.get('affects_specification') is False:
+            continue
         raw_stage = gap.get('stage')
         stage = 'documents' if raw_stage in {'source_reading', 'source_binding'} else raw_stage
         reason = gap.get('reason')

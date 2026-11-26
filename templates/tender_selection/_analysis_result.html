@@ -12,23 +12,24 @@
       {% for proposal_group in document_proposal_groups %}
       <section class="ts-review-group" aria-label="{{ proposal_group.display_name }}">
         <h4>{{ proposal_group.display_name }}</h4>
-        <div class="ts-review-before"><small>Было</small><strong>{{ proposal_group.parent.original_text }}</strong><span>{{ proposal_group.parent_quantity|floatformat:"-2" }} {{ proposal_group.parent_unit }}{% if proposal_group.is_kit %} · {{ proposal_group.original_values.price|rub_precise }} за набор · {{ proposal_group.original_values.sum|rub_precise }} всего{% endif %}</span></div>
+        <div class="ts-review-compare"><div class="ts-review-before"><small>Было</small><strong>{{ proposal_group.parent.original_text }}</strong><span>{{ proposal_group.parent_quantity|floatformat:"-2" }} {{ proposal_group.parent_unit }}{% if proposal_group.is_kit %} · {{ proposal_group.original_values.price|rub_precise }} за набор · {{ proposal_group.original_values.sum|rub_precise }} всего{% endif %}</span></div>
         <div class="ts-review-after"><small>Стало</small>
         {% for proposal in proposal_group.items %}{% include "tender_selection/_document_proposal.html" %}{% endfor %}
-        </div>
+        </div></div>
       </section>
       {% endfor %}
       </details>
     </section>
     {% endif %}
-    {% include "tender_selection/_product_editor.html" %}
     {% if display_items %}
     {% if v2_questions %}<div class="ts-question-indicator"><a href="#owner-question-{{ v2_questions.0.pk }}">Нужно уточнить · {{ v2_questions|length }}</a></div>{% endif %}
-    <h3 class="settings-subtitle">Перечень товаров ({{ display_item_count }})</h3>
     {% if document_item_count %}<div class="ts-derived-note">В извещении: {{ card.items|length }} позиц. · Сейчас: {{ display_item_count }} товаров и групп · <details class="ts-original-toggle"><summary>Показать исходную запись</summary><span>{{ original_source_texts|join:"; " }}</span></details></div>{% endif %}
+    {% endif %}
+    {% include "tender_selection/_product_editor.html" %}
+    {% if not product_editor and display_items %}<h3 class="settings-subtitle">Перечень товаров ({{ display_item_count }})</h3>{% endif %}
+    {% if display_items %}
     <div class="ts-products-workspace" data-products-workspace>
       <div class="ts-products-list" data-products-list aria-label="Список товаров">
-        <p class="ts-sub">Выберите товар, чтобы открыть ТЗ и маршрут.</p>
         <div class="ts-products-columns" aria-hidden="true"><span>Товар</span><span class="ts-quantity-heading">Количество</span><span class="ts-finance-values"><span>НМЦК</span><span>Себестоимость</span><span>РРЦ</span><span>Прибыль*</span></span><span></span></div>
         {% for item in ungrouped_display_items %}{% include "tender_selection/_product_entry.html" with entry_prefix="single" finance_key=item.finance_key %}
         {% if item.components_detail %}<div class="ts-products-children">{% for component in item.components_detail %}{% include "tender_selection/_product_entry.html" with item=component entry_prefix=component.finance_key finance_key=component.finance_key components_only=True %}{% endfor %}</div>{% endif %}{% endfor %}

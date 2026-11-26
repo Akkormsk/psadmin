@@ -452,14 +452,19 @@ body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel { pad
 .ts-review-overview > summary { cursor:pointer; font-weight:600; }
 .ts-review-group { margin:12px 0; padding:12px; border:1px solid var(--separator); border-radius:var(--radius-md); background:var(--surface); }
 .ts-review-group h4 { margin:0 0 10px; }
-.ts-review-before { display:grid; gap:4px; padding:8px 0; border-bottom:1px solid var(--separator); }
-.ts-review-after { padding-top:8px; }
+.ts-review-compare { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:20px; align-items:start; }
+.ts-review-before { display:grid; gap:4px; padding:8px 0; min-width:0; overflow-wrap:anywhere; }
+.ts-review-after { padding:8px 0 8px 20px; border-left:1px solid var(--separator); min-width:0; overflow-wrap:anywhere; }
 .ts-review-group small,.ts-review-diff small { display:block; color:var(--ink-3); font-size:11px; font-weight:600; }
 .ts-review-item { padding:8px 0; }
 .ts-review-item + .ts-review-item { border-top:1px solid var(--separator); }
 .ts-review-diff { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:8px; }
-.ts-review-diff > div { padding:8px; background:var(--tint-neutral); border-radius:8px; overflow-wrap:anywhere; }
+.ts-review-diff > div { padding:4px 0; overflow-wrap:anywhere; }
+.ts-review-diff > div + div { border-left:1px solid var(--separator); padding-left:12px; }
 .ts-review-diff p { margin:5px 0; font-size:13px; }
 .ts-product-edit-toolbar { display:flex; justify-content:flex-end; align-items:center; flex-wrap:wrap; gap:8px; }
-.ts-product-edit-toolbar [data-product-edit-status] { order:-1; margin-right:auto; }
-@media(max-width:650px) { .ts-review-diff { grid-template-columns:1fr; } }
+.ts-product-edit-toolbar { margin:0 0 6px; }
+.ts-product-edit-toolbar > h3 { margin:0 auto 0 0; }
+.ts-product-edit-toolbar [data-product-edit-status]:empty { display:none; }
+.ts-product-edit-toolbar [data-product-edit-status]:not(:empty) { flex-basis:100%; text-align:right; }
+@media(max-width:650px) { .ts-review-compare,.ts-review-diff { grid-template-columns:1fr; gap:8px; } .ts-review-after,.ts-review-diff > div + div { border-left:0; border-top:1px solid var(--separator); padding:8px 0 0; } }
