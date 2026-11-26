@@ -45,10 +45,10 @@ class CommercialItemOwnershipTests(TestCase):
         order_item = self.item(order=self.order)
         task_item = self.item(task=self.task)
         for item in (tender_item, order_item, task_item):
-            with self.assertRaises(ValidationError):
+            with self.assertRaises(ValidationError), transaction.atomic():
                 item.source_items.add(self.foreign_source)
         for item in (order_item, task_item):
-            with self.assertRaises(ValidationError):
+            with self.assertRaises(ValidationError), transaction.atomic():
                 self.source.commercial_items.add(item)
         self.source.commercial_items.add(tender_item)
         self.assertEqual(list(tender_item.source_items.all()), [self.source])
