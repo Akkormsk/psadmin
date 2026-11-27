@@ -13,7 +13,7 @@ from tender_selection.models import Tender
 
 from .models import WorkBoard, WorkBoardCard, WorkBoardColumn
 from .workboards import (add_column, create_board, create_task_card, create_tender_card, move_card,
-                         task_progress, edit_task_work, create_task_from_plan)
+                         task_progress, edit_task_work, create_task_from_plan, delete_card)
 
 
 def _visible_boards(user):
@@ -211,9 +211,8 @@ def workboard_task_import(request, board_id):
 def workboard_card_delete(request, card_id):
     card = get_object_or_404(WorkBoardCard.objects.select_for_update(), pk=card_id)
     board = _board_for_user(request.user, card.board_id)
-    # A task belongs to its card; the tender is a separate trading entity.
-    if card.task_id:
-        card.task.delete()
-    else:
-        card.delete()
+    try:
+        delete_card(card, request.user)
+    except ValidationError as error:
+        messages.error(request, _error_text(error))
     return _board_redirect(board)

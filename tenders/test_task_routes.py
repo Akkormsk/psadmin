@@ -76,3 +76,30 @@ class TaskRouteTests(TestCase):
         plan = ComponentRoutePlan.objects.create(commercial_item=item, scope=ComponentRoutePlan.Scope.SHARED)
         with self.assertRaises(ValidationError):
             ComponentOperationStep.objects.create(route_plan=plan, manual_name="Ручной этап", position=0)
+
+    def test_delete_imported_task_with_route_and_history(self):
+        from .models import Task, TenderCommercialItem, ComponentRoutePlan, ComponentOperationStep
+        self.toggle(self.checks[0], True)
+        other = create_task_from_plan(self.board, self.owner, {
+            "name": "Другая задача",
+            "items": [{"name": "Проверка", "steps": [{"name": "Этап", "checks": ["Готово"]}]}],
+        })
+        other_check = WorkCheckpoint.objects.get(step__route_plan__commercial_item__task_id=other.task_id)
+        edit_task_work(other, self.owner, "toggle_check", {"checkpoint_id": other_check.pk, "completed": True})
+        task_id = self.card.task_id
+        item_ids = list(TenderCommercialItem.objects.filter(task_id=task_id).values_list("pk", flat=True))
+        plan_ids = list(ComponentRoutePlan.objects.filter(commercial_item_id__in=item_ids).values_list("pk", flat=True))
+        step_ids = list(ComponentOperationStep.objects.filter(route_plan_id__in=plan_ids).values_list("pk", flat=True))
+        check_ids = [check.pk for check in self.checks]
+        self.client.force_login(self.owner)
+        response = self.client.post(reverse("workboard_card_delete", args=[self.card.pk]))
+        self.assertRedirects(response, f"{reverse('workboard_list')}?board={self.board.pk}")
+        self.assertFalse(WorkBoardCard.objects.filter(pk=self.card.pk).exists())
+        self.assertFalse(Task.objects.filter(pk=task_id).exists())
+        self.assertFalse(TenderCommercialItem.objects.filter(pk__in=item_ids).exists())
+        self.assertFalse(ComponentRoutePlan.objects.filter(pk__in=plan_ids).exists())
+        self.assertFalse(ComponentOperationStep.objects.filter(pk__in=step_ids).exists())
+        self.assertFalse(WorkCheckpoint.objects.filter(pk__in=check_ids).exists())
+        self.assertFalse(WorkCheckpointEvent.objects.filter(checkpoint_id__in=check_ids).exists())
+        self.assertTrue(WorkBoardCard.objects.filter(pk=other.pk).exists())
+        self.assertTrue(WorkCheckpointEvent.objects.filter(checkpoint_id=other_check.pk).exists())

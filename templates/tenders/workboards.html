@@ -72,7 +72,7 @@
           <div class="kb-column__cards">
             {% for card in column.visible_cards %}
               <article class="kb-card" data-board-card data-move-url="{% url 'workboard_card_move' card.pk %}" draggable="true">
-                <form class="kb-card__dismiss wb-card-delete" method="post" action="{% url 'workboard_card_delete' card.pk %}" onsubmit="return confirm('{% if card.task %}Удалить задачу и её подзадачи?{% else %}Убрать карточку с доски? Сам тендер сохранится.{% endif %}')">
+                <form class="kb-card__dismiss wb-card-delete" method="post" action="{% url 'workboard_card_delete' card.pk %}" onsubmit="return confirm('{% if card.task %}Удалить задачу, её подзадачи, маршруты и историю выполнения?{% else %}Убрать карточку с доски? Сам тендер сохранится.{% endif %}')">
                   {% csrf_token %}<button type="submit" class="hover-action" title="Удалить карточку" aria-label="Удалить карточку">×</button>
                 </form>
                 {% if card.task %}

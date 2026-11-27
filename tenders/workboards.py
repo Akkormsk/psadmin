@@ -248,3 +248,30 @@ def create_task_from_plan(board, actor, payload):
             for criterion in checks[1:]:
                 edit_task_work(card, actor, "add_check", {"step_id": route_step.pk, "name": criterion, "required": True})
     return card
+
+
+@transaction.atomic
+def delete_card(card, actor):
+    """Explicit deletion of a whole Task; removing Tender only detaches it."""
+    from django.core.exceptions import PermissionDenied
+    from django.db.models.deletion import ProtectedError
+
+    locked = WorkBoardCard.objects.select_for_update().get(pk=card.pk)
+    if not actor.is_superuser and locked.board.created_by_id != actor.pk:
+        raise PermissionDenied
+    try:
+        if locked.task_id:
+            # PROTECT is intentional for ordinary route edits. Only explicit
+            # whole-task deletion removes its own checkpoints and their events.
+            checkpoints = WorkCheckpoint.objects.filter(
+                step__route_plan__commercial_item__task_id=locked.task_id,
+                step__route_plan__commercial_item__tender__isnull=True,
+                step__route_plan__commercial_item__order__isnull=True,
+            )
+            WorkCheckpointEvent.objects.filter(checkpoint__in=checkpoints).delete()
+            checkpoints.delete()
+            locked.task.delete()
+        else:
+            locked.delete()
+    except ProtectedError as error:
+        raise ValidationError("Карточка связана с другими данными и не может быть удалена.") from error
