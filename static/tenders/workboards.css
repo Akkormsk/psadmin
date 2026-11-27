@@ -1,0 +1,30 @@
+.workboards-page { padding: 20px; }
+.workboards-head { align-items: end; display: flex; gap: 24px; justify-content: space-between; margin: 24px 0; }
+.workboards-head h1, .workboards-tools h2 { margin: 0; }
+.workboards-head p { color: #667085; margin: 6px 0 0; }
+.workboards-inline-form, .workboards-tools form { display: flex; gap: 8px; }
+.workboards-inline-form input, .workboards-tools input, .workboards-tools select, .workboards-tools textarea, .workboards-move-form select { border: 1px solid #d0d5dd; border-radius: 8px; padding: 9px 10px; }
+.workboards-page button { background: #175cd3; border: 0; border-radius: 8px; color: white; cursor: pointer; padding: 9px 13px; }
+.workboards-messages { background: #fff4e5; border-radius: 8px; margin-bottom: 16px; padding: 1px 12px; }
+.workboards-switcher { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.workboards-switcher a { background: #f2f4f7; border-radius: 999px; color: #344054; padding: 8px 13px; text-decoration: none; }
+.workboards-switcher a.is-active { background: #e8f0ff; color: #175cd3; font-weight: 600; }
+.workboards-tools { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-bottom: 20px; }
+.workboards-tools form { align-items: stretch; background: #f8fafc; border: 1px solid #eaecf0; border-radius: 12px; flex-direction: column; padding: 14px; }
+.workboards-tools h2 { font-size: 15px; }
+.workboards-board { display: flex; gap: 14px; min-height: 360px; overflow-x: auto; padding-bottom: 12px; }
+.workboards-column { background: #f2f4f7; border-radius: 12px; flex: 0 0 300px; padding: 12px; }
+.workboards-column > header { align-items: center; display: flex; justify-content: space-between; }
+.workboards-column > header h2 { font-size: 15px; margin: 0; }
+.workboards-column > header span { color: #667085; }
+.workboards-cards { display: grid; gap: 10px; margin-top: 12px; }
+.workboards-card { background: white; border: 1px solid #eaecf0; border-radius: 10px; padding: 12px; }
+.workboards-card small { color: #175cd3; font-weight: 600; }
+.workboards-card h3 { font-size: 15px; margin: 7px 0; }
+.workboards-card h3 a { color: inherit; }
+.workboards-card p { color: #667085; font-size: 13px; }
+.workboards-move-form { border-top: 1px solid #eaecf0; display: grid; gap: 7px; margin-top: 10px; padding-top: 10px; }
+.workboards-move-form label { color: #667085; font-size: 12px; }
+.workboards-move-form button { justify-self: start; }
+.workboards-empty, .workboards-empty-column { color: #667085; }
+@media (max-width: 720px) { .workboards-head { align-items: stretch; flex-direction: column; } .workboards-inline-form { flex-direction: column; } }

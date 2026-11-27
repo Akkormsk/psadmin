@@ -4,6 +4,7 @@ import uuid
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.dispatch import receiver
 from django.utils import timezone
 
 
@@ -1117,13 +1118,154 @@ class ConversationAttachment(models.Model):
 class KnowledgeRecord(models.Model):
     feedback_event=models.ForeignKey(OwnerFeedbackEvent,null=True,blank=True,on_delete=models.SET_NULL); scope_type=models.CharField(max_length=64); scope_context=models.JSONField(default=dict,blank=True); applicability=models.JSONField(default=dict,blank=True); payload=models.JSONField(default=dict,blank=True); confidence=models.DecimalField(max_digits=5,decimal_places=4,null=True,blank=True); status=models.CharField(max_length=24,default="draft"); supersedes=models.ForeignKey("self",null=True,blank=True,on_delete=models.SET_NULL); created_at=models.DateTimeField(auto_now_add=True); updated_at=models.DateTimeField(auto_now=True)
 
+class Task(models.Model):
+    name = models.CharField("Название", max_length=300)
+    description = models.TextField("Описание", blank=True)
+    created_at = models.DateTimeField("Создана", auto_now_add=True)
+
+    def __str__(self):
+        return self.name
+
+
+class WorkBoard(models.Model):
+    name = models.CharField("Название", max_length=200)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, verbose_name="Создал",
+        on_delete=models.PROTECT, related_name="workboards",
+    )
+    created_at = models.DateTimeField("Создана", auto_now_add=True)
+    updated_at = models.DateTimeField("Обновлена", auto_now=True)
+
+    class Meta:
+        ordering = ["name", "pk"]
+        verbose_name = "Доска"
+        verbose_name_plural = "Доски"
+
+    def __str__(self):
+        return self.name
+
+
+class WorkBoardColumn(models.Model):
+    class Kind(models.TextChoices):
+        QUEUE = "queue", "В очереди"
+        STANDARD = "standard", "Обычная"
+        DONE = "done", "Готово"
+
+    DEFAULT_QUEUE_NAME = "В очереди"
+    DEFAULT_DONE_NAME = "Готово"
+
+    board = models.ForeignKey(
+        WorkBoard, verbose_name="Доска", on_delete=models.CASCADE, related_name="columns",
+    )
+    name = models.CharField("Название", max_length=120)
+    kind = models.CharField("Назначение", max_length=16, choices=Kind.choices, default=Kind.STANDARD)
+    position = models.PositiveIntegerField("Порядок")
+    created_at = models.DateTimeField("Создана", auto_now_add=True)
+
+    class Meta:
+        ordering = ["position", "pk"]
+        verbose_name = "Колонка доски"
+        verbose_name_plural = "Колонки доски"
+        constraints = [
+            models.UniqueConstraint(fields=["board", "position"], name="unique_workboard_column_position"),
+            models.UniqueConstraint(
+                fields=["board", "kind"], condition=models.Q(kind="queue"),
+                name="unique_workboard_queue_column",
+            ),
+            models.UniqueConstraint(
+                fields=["board", "kind"], condition=models.Q(kind="done"),
+                name="unique_workboard_done_column",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.board}: {self.name}"
+
+
+class WorkBoardCard(models.Model):
+    board = models.ForeignKey(
+        WorkBoard, verbose_name="Доска", on_delete=models.CASCADE, related_name="cards",
+    )
+    column = models.ForeignKey(
+        WorkBoardColumn, verbose_name="Колонка", on_delete=models.PROTECT, related_name="cards",
+    )
+    task = models.OneToOneField(
+        Task, verbose_name="Задача", null=True, blank=True,
+        on_delete=models.CASCADE, related_name="workboard_card",
+    )
+    tender = models.OneToOneField(
+        "tender_selection.Tender", verbose_name="Тендер", null=True, blank=True,
+        on_delete=models.PROTECT, related_name="workboard_card",
+    )
+    position = models.PositiveIntegerField("Порядок", default=0)
+    completed_at = models.DateTimeField("Завершена", null=True, blank=True)
+    created_at = models.DateTimeField("Создана", auto_now_add=True)
+    updated_at = models.DateTimeField("Обновлена", auto_now=True)
+
+    class Meta:
+        ordering = ["position", "pk"]
+        verbose_name = "Карточка доски"
+        verbose_name_plural = "Карточки доски"
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(task__isnull=False, tender__isnull=True)
+                    | models.Q(task__isnull=True, tender__isnull=False)
+                ),
+                name="workboard_card_exactly_one_subject",
+            ),
+        ]
+
+    def _column_kind(self, using):
+        column = WorkBoardColumn.objects.using(using).filter(pk=self.column_id).values("board_id", "kind").first()
+        if column is None:
+            return None
+        if column["board_id"] != self.board_id:
+            raise ValidationError({"column": "Колонка должна принадлежать выбранной доске."})
+        return column["kind"]
+
+    def _validate_subject(self, using):
+        if bool(self.task_id) == bool(self.tender_id):
+            raise ValidationError("Карточка должна относиться к одной задаче или одному тендеру.")
+        if self.tender_id:
+            from tender_selection.models import Tender
+
+            if not Tender.objects.using(using).filter(
+                pk=self.tender_id, outcome_status=Tender.OUTCOME_WON,
+            ).exists():
+                raise ValidationError({"tender": "На доску исполнения можно добавить только выигранный тендер."})
+
+    def clean(self):
+        super().clean()
+        using = self._state.db or "default"
+        self._validate_subject(using)
+        self._column_kind(using)
+
+    def save(self, *args, **kwargs):
+        from django.db import router
+
+        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        self._validate_subject(using)
+        kind = self._column_kind(using)
+        self.completed_at = timezone.now() if kind == WorkBoardColumn.Kind.DONE else None
+        if kwargs.get("update_fields") is not None:
+            kwargs["update_fields"] = set(kwargs["update_fields"]) | {"completed_at"}
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        subject = self.task if self.task_id else self.tender
+        return str(subject)
+
+
 class TenderCommercialItem(models.Model):
     class Structure(models.TextChoices):
         SIMPLE = "simple", "Simple"
         AGGREGATE = "aggregate", "Aggregate"
         COMPOSITE = "composite", "Composite"
 
-    tender = models.ForeignKey("tender_selection.Tender", on_delete=models.CASCADE, related_name="v2_commercial_items")
+    tender = models.ForeignKey("tender_selection.Tender", on_delete=models.CASCADE, related_name="v2_commercial_items", null=True, blank=True)
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="commercial_items", null=True, blank=True)
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="commercial_items", null=True, blank=True)
     job = models.ForeignKey(TenderComputeJob, null=True, blank=True, on_delete=models.SET_NULL, related_name="commercial_items")
     source_items = models.ManyToManyField(TenderSourceItem, related_name="commercial_items")
     source_key = models.CharField(max_length=160)
@@ -1138,8 +1280,55 @@ class TenderCommercialItem(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["tender", "source_key"], name="unique_v2_commercial_item")]
+        constraints = [
+            models.UniqueConstraint(fields=["tender", "source_key"], name="unique_v2_commercial_item"),
+            models.UniqueConstraint(fields=["order", "source_key"], name="unique_order_commercial_item"),
+            models.UniqueConstraint(fields=["task", "source_key"], name="unique_task_commercial_item"),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(tender__isnull=False, order__isnull=True, task__isnull=True)
+                    | models.Q(tender__isnull=True, order__isnull=False, task__isnull=True)
+                    | models.Q(tender__isnull=True, order__isnull=True, task__isnull=False)
+                ),
+                name="commercial_item_exactly_one_owner",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(tender__isnull=False) | models.Q(job__isnull=True),
+                name="commercial_item_tender_job_only",
+            ),
+        ]
         ordering = ["pk"]
+
+    def _validate_tender_links(self, using):
+        if self.job_id and (
+            not self.tender_id
+            or not TenderComputeJob.objects.using(using).filter(pk=self.job_id, tender_id=self.tender_id).exists()
+        ):
+            raise ValidationError({"job": "Задание должно принадлежать тому же тендеру."})
+        if self.pk and self.source_items.using(using).exclude(tender_id=self.tender_id).exists():
+            raise ValidationError({"source_items": "Исходные позиции должны принадлежать тому же тендеру."})
+
+    def clean(self):
+        super().clean()
+        self._validate_tender_links(self._state.db or "default")
+
+    def save(self, *args, **kwargs):
+        from django.db import router
+
+        self._validate_tender_links(kwargs.get("using") or router.db_for_write(type(self), instance=self))
+        return super().save(*args, **kwargs)
+
+
+@receiver(models.signals.m2m_changed, sender=TenderCommercialItem.source_items.through)
+def _validate_commercial_item_sources(sender, instance, action, reverse, model, pk_set, using, **kwargs):
+    if action != "pre_add" or not pk_set:
+        return
+    if reverse:
+        invalid = TenderCommercialItem.objects.using(using).filter(pk__in=pk_set).exclude(tender_id=instance.tender_id).exists()
+    else:
+        invalid = not instance.tender_id or TenderSourceItem.objects.using(using).filter(pk__in=pk_set).exclude(tender_id=instance.tender_id).exists()
+    if invalid:
+        raise ValidationError("Исходные позиции должны принадлежать тому же тендеру.")
 
 
 class CalculationComponent(models.Model):
@@ -1147,7 +1336,11 @@ class CalculationComponent(models.Model):
     source_item = models.ForeignKey(TenderSourceItem, null=True, blank=True, on_delete=models.SET_NULL, related_name="calculation_components")
     parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="children")
     name = models.TextField()
-    quantity_per_parent = models.DecimalField(max_digits=14, decimal_places=4, default=1)
+    description = models.TextField("Описание", blank=True)
+    quantity_per_parent = models.DecimalField(
+        "Количество на единицу родителя", max_digits=14, decimal_places=4,
+        default=1, null=True, blank=True,
+    )
     unit = models.CharField(max_length=64, blank=True)
     requirements = models.JSONField(default=dict, blank=True)
     provenance = models.JSONField(default=dict, blank=True)
@@ -1159,8 +1352,72 @@ class CalculationComponent(models.Model):
     class Meta:
         ordering = ["sort_order", "pk"]
 
+    def _validate_working_item_links(self, using):
+        if not self.commercial_item_id:
+            return
+        item = TenderCommercialItem.objects.using(using).filter(pk=self.commercial_item_id).values(
+            "tender_id", "order_id", "task_id",
+        ).first()
+        if item is None:
+            return
+        if self.quantity_per_parent is None and item["task_id"] is None:
+            raise ValidationError({"quantity_per_parent": "Количество можно не указывать только для задачи."})
+
+        if self.parent_id:
+            ancestor_id = self.parent_id
+            seen = set()
+            while ancestor_id:
+                if ancestor_id == self.pk or ancestor_id in seen:
+                    raise ValidationError({"parent": "Компонент не может входить сам в себя."})
+                seen.add(ancestor_id)
+                ancestor = CalculationComponent.objects.using(using).filter(pk=ancestor_id).values(
+                    "commercial_item_id", "parent_id",
+                ).first()
+                if ancestor is None or ancestor["commercial_item_id"] != self.commercial_item_id:
+                    raise ValidationError({"parent": "Родитель должен относиться к той же рабочей позиции."})
+                ancestor_id = ancestor["parent_id"]
+
+        if self.source_item_id:
+            if item["tender_id"] is None:
+                raise ValidationError({"source_item": "Исходная позиция доступна только для товара тендера."})
+            allowed = set(
+                TenderCommercialItem.objects.using(using)
+                .filter(pk=self.commercial_item_id, source_items__isnull=False)
+                .values_list("source_items__pk", flat=True)
+            )
+            source_id = self.source_item_id
+            seen = set()
+            while source_id and source_id not in allowed:
+                if source_id in seen:
+                    source_id = None
+                    break
+                seen.add(source_id)
+                source = TenderSourceItem.objects.using(using).filter(pk=source_id).values(
+                    "tender_id", "parent_id",
+                ).first()
+                if source is None or source["tender_id"] != item["tender_id"]:
+                    source_id = None
+                    break
+                source_id = source["parent_id"]
+            if source_id not in allowed:
+                raise ValidationError({"source_item": "Источник должен относиться к той же рабочей позиции."})
+
+    def clean(self):
+        super().clean()
+        self._validate_working_item_links(self._state.db or "default")
+
+    def save(self, *args, **kwargs):
+        from django.db import router
+
+        self._validate_working_item_links(kwargs.get("using") or router.db_for_write(type(self), instance=self))
+        return super().save(*args, **kwargs)
+
     @property
     def effective_quantity(self):
+        if self.commercial_item.task_id and (
+            self.commercial_item.quantity is None or self.quantity_per_parent is None
+        ):
+            return None
         return (self.commercial_item.quantity or 0) * self.quantity_per_parent
 
 
