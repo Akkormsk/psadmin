@@ -1,0 +1,42 @@
+name: Workboard TEST data operation
+
+on:
+  push:
+    branches:
+      - feature/workboards
+
+permissions:
+  contents: read
+
+jobs:
+  operate:
+    if: vars.WORKBOARD_DATA_ACTION == 'inspect' || vars.WORKBOARD_DATA_ACTION == 'import'
+    runs-on: ubuntu-22.04
+    env:
+      SSH_HOST: ${{ secrets.PSADMIN_TEST_SSH_HOST }}
+      SSH_USER: deploy
+      WORKBOARD_DATA_ACTION: ${{ vars.WORKBOARD_DATA_ACTION }}
+      WORKBOARD_DATA_PAYLOAD_B64: ${{ vars.WORKBOARD_DATA_PAYLOAD_B64 }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure strict SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PSADMIN_TEST_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PSADMIN_TEST_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+      - name: Inspect or import through the shared workboard service
+        run: |
+          set -euo pipefail
+          [[ "$WORKBOARD_DATA_ACTION" =~ ^(inspect|import)$ ]]
+          [[ "$WORKBOARD_DATA_PAYLOAD_B64" =~ ^[A-Za-z0-9+/=]*$ ]]
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+            "$SSH_USER@$SSH_HOST" \
+            "cd /home/deploy/psadmin-test/deploy/vds && docker compose -f compose.test.yml exec -T -e WORKBOARD_DATA_ACTION='$WORKBOARD_DATA_ACTION' -e WORKBOARD_DATA_PAYLOAD_B64='$WORKBOARD_DATA_PAYLOAD_B64' test-web python -B manage.py shell --no-imports" \
+            < scripts/workboard_data_operation.py
