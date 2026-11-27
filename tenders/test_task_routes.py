@@ -131,3 +131,13 @@ class TaskRouteTests(TestCase):
                                     {"action": "toggle_check", "checkpoint_id": self.checks[0].pk, "completed": "1"})
         self.assertRedirects(response, url + "?workspace=1")
         self.assertTrue(WorkCheckpoint.objects.get(pk=self.checks[0].pk).completed_at)
+
+    def test_approved_task_layout(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(reverse("workboard_task_detail", args=[self.card.pk]) + "?workspace=1")
+        self.assertContains(response, 'wb-task-inner')
+        self.assertContains(response, 'wb-task-items')
+        self.assertNotContains(response, 'class="panel wb-panel"')
+        self.assertContains(response, 'wb-route-arrow')
+        self.assertContains(response, 'role="checkbox"', count=3)
+        self.assertContains(response, 'name="checkpoint_id"')

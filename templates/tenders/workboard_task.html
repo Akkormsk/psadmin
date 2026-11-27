@@ -1,65 +1,68 @@
 {% extends "base.html" %}
 {% load static %}
 {% block title %}{{ card.task.name }} — PSADMIN{% endblock %}
-{% block extra_head %}<link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}"><link rel="stylesheet" href="{% static 'tenders/workboards.css' %}?v=20261127-7">{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}"><link rel="stylesheet" href="{% static 'tenders/workboards.css' %}?v=20261127-task-approved-2">{% endblock %}
+{% block body_class %}wb-task-body{% endblock %}
 {% block content %}
 <main class="container workboards-page wb-task-page" data-workspace-single-layer>
   <a class="back-link" href="{% url 'workboard_list' %}?board={{ card.board_id }}">← {{ card.board.name }}</a>
   {% if not request.GET.workspace %}{% include "tender_selection/_nav.html" with active="workboards" %}{% endif %}
   {% for message in messages %}<p class="workboards-messages">{{ message }}</p>{% endfor %}
-  <section class="panel wb-panel">
-    <div class="wb-toolbar"><small>Задача · {{ card.column.name }}</small>
+  <div class="wb-task-inner">
+  <section class="wb-task-overview">
+    <div class="wb-task-meta"><small>{{ card.board.name }}</small>
       <form method="post" action="{% url 'workboard_card_move' card.pk %}" class="workboards-move-form">{% csrf_token %}<input type="hidden" name="from_task" value="1">
         <label for="wb-target">Колонка</label><select class="form-control" data-customized="true" id="wb-target" name="column_id">{% for column in columns %}<option value="{{ column.pk }}"{% if column.pk == card.column_id %} selected{% endif %}>{{ column.name }}</option>{% endfor %}</select><button type="submit" class="ts-quiet">Перенести</button>
       </form>
     </div>
-    <h1>{{ card.task.name }} <button type="button" class="wb-icon" onclick="document.getElementById('edit-task').showModal()" title="Редактировать задачу" aria-label="Редактировать задачу">✎</button></h1>
-    <p>{{ card.task.description|linebreaksbr }}</p>
-    {% if progress.total %}<div class="wb-progress"><span>Выполнение · {{ progress.done }} из {{ progress.total }} подзадач</span><progress max="100" value="{{ progress.percent }}"></progress></div>{% endif %}
+    <div class="wb-task-title"><h1>{{ card.task.name }}</h1><button type="button" class="wb-icon" onclick="document.getElementById('edit-task').showModal()" title="Редактировать задачу" aria-label="Редактировать задачу"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5 5 5M4 20l4-1 12-12-4-4L4 15z"/></svg></button></div>
+    <p class="wb-task-description">{{ card.task.description|linebreaksbr }}</p>
+    {% if progress.total %}<div class="wb-card-progress wb-task-progress"><div><span>{{ progress.done }} из {{ progress.total }} подзадач выполнено</span><span>{{ progress.percent }}%</span></div><progress max="100" value="{{ progress.percent }}"></progress></div>{% endif %}
   </section>
-  <section class="panel wb-panel">
-    <div class="wb-toolbar"><h2>Подзадачи <small>{{ progress.total }}</small></h2><button type="button" class="ts-quiet" onclick="document.getElementById('new-item').showModal()">+ Подзадача</button></div>
+  <section class="wb-task-items">
+    <div class="wb-task-section-head"><h2>Подзадачи <small>{{ progress.total }}</small></h2><button type="button" class="ts-quiet" onclick="document.getElementById('new-item').showModal()">+ Подзадача</button></div>
     {% for row in progress.items %}
-    <details class="wb-item" {% if forloop.first %}open{% endif %}>
-      <summary><span>{% if row.done %}✓{% else %}○{% endif %} {{ row.item.display_name }}</span><small>{% if row.total %}{{ row.done_count }}/{{ row.total }}{% else %}Без маршрута{% endif %}</small></summary>
+    <details class="wb-item{% if row.done %} is-complete{% endif %}" data-wb-detail="item-{{ row.item.pk }}" {% if forloop.first %}open{% endif %}>
+      <summary><span class="wb-item-dot" aria-label="{% if row.done %}Выполнено{% else %}Не выполнено{% endif %}">{% if row.done %}✓{% endif %}</span><span class="wb-summary-name">{{ row.item.display_name }}</span><small>{% if row.total %}{{ row.done_count }}/{{ row.total }}{% else %}Без маршрута{% endif %}</small></summary>
       <div class="wb-item-body">
-        <div class="wb-toolbar"><p>{{ row.item.description|linebreaksbr }}</p><button type="button" class="wb-icon" onclick="document.getElementById('edit-item-{{ row.item.pk }}').showModal()" title="Редактировать подзадачу" aria-label="Редактировать подзадачу">✎</button></div>
-        <h3>Маршрут</h3>
+        <div class="wb-item-description"><p>{{ row.item.description|linebreaksbr }}</p><button type="button" class="wb-icon" onclick="document.getElementById('edit-item-{{ row.item.pk }}').showModal()" title="Редактировать подзадачу" aria-label="Редактировать подзадачу"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5 5 5M4 20l4-1 12-12-4-4L4 15z"/></svg></button></div>
+        <h3 class="wb-route-label">Маршрут</h3>
         <div class="wb-route">
         {% for stage in row.steps %}
-          <details class="wb-stage" {% if not stage.done and not stage.blocked %}open{% endif %}>
-            <summary><span>{% if stage.done %}✓{% else %}{{ forloop.counter }}.{% endif %} {{ stage.step.display_name }}</span><small>{{ stage.done_count }}/{{ stage.total }}</small></summary>
+          {% if not forloop.first %}<div class="wb-route-arrow" aria-hidden="true">↓</div>{% endif %}<details class="wb-stage" data-wb-detail="step-{{ stage.step.pk }}" {% if not stage.done and not stage.blocked %}open{% endif %}>
+            <summary><span class="wb-step-num">{% if stage.done %}✓{% else %}{{ forloop.counter }}{% endif %}</span><span class="wb-summary-name">{{ stage.step.display_name }}</span><small>{{ stage.done_count }}/{{ stage.total }}</small></summary>
             <div class="wb-stage-body">
             {% if stage.blocked %}<p class="wb-hint">Сначала завершите предыдущий этап.</p>{% endif %}
             {% for criterion in stage.checks %}
               <form class="wb-check" method="post" action="{% url 'workboard_task_edit' card.pk %}">{% csrf_token %}<input type="hidden" name="action" value="toggle_check"><input type="hidden" name="checkpoint_id" value="{{ criterion.pk }}"><input type="hidden" name="completed" value="{% if criterion.completed_at %}0{% else %}1{% endif %}">
-                <button type="submit" class="wb-check-button" role="checkbox" aria-checked="{% if criterion.completed_at %}true{% else %}false{% endif %}" {% if stage.blocked and not criterion.completed_at %}disabled{% endif %}>{% if criterion.completed_at %}☑{% else %}☐{% endif %}</button><span {% if criterion.completed_at %}class="wb-checked"{% endif %}>{{ criterion.name }} {% if not criterion.required %}<small>· необязательно</small>{% endif %}</span>
+                <button type="submit" class="wb-check-button" aria-label="{{ criterion.name }}" role="checkbox" aria-checked="{% if criterion.completed_at %}true{% else %}false{% endif %}" {% if stage.blocked and not criterion.completed_at %}disabled{% endif %}>{% if criterion.completed_at %}✓{% endif %}</button><span {% if criterion.completed_at %}class="wb-checked"{% endif %}>{{ criterion.name }} {% if not criterion.required %}<small>· необязательно</small>{% endif %}</span>
               </form>
             {% endfor %}
             <button type="button" class="wb-link" onclick="document.getElementById('new-check-{{ stage.step.pk }}').showModal()">+ Критерий</button>
             </div>
           </details>
-          <dialog id="new-check-{{ stage.step.pk }}" class="wb-dialog"><h2>Новый критерий</h2><form method="post" action="{% url 'workboard_task_edit' card.pk %}">{% csrf_token %}<input type="hidden" name="action" value="add_check"><input type="hidden" name="step_id" value="{{ stage.step.pk }}"><input name="name" maxlength="300" required placeholder="Как проверяем выполнение?"><label><input type="checkbox" name="required" value="1" checked> Обязательный</label><button type="submit" class="button-success">Сохранить</button><button type="button" class="button-secondary" onclick="this.closest('dialog').close()">Отмена</button></form></dialog>
+          <dialog id="new-check-{{ stage.step.pk }}" class="wb-dialog"><h2>Новый критерий</h2><form method="post" action="{% url 'workboard_task_edit' card.pk %}">{% csrf_token %}<input type="hidden" name="action" value="add_check"><input type="hidden" name="step_id" value="{{ stage.step.pk }}"><input class="form-control" name="name" maxlength="300" required placeholder="Как проверяем выполнение?"><label><input type="checkbox" name="required" value="1" checked> Обязательный</label><div class="wb-dialog-actions"><button type="button" class="button-secondary" onclick="this.closest('dialog').close()">Отмена</button><button type="submit" class="button-success">Сохранить</button></div></form></dialog>
         {% empty %}<p class="wb-hint">Маршрут пока не создан.</p>{% endfor %}
         <button type="button" class="wb-link" onclick="document.getElementById('new-step-{{ row.item.pk }}').showModal()">+ Этап маршрута</button>
         </div>
       </div>
     </details>
-    <dialog id="edit-item-{{ row.item.pk }}" class="wb-dialog"><h2>Редактировать подзадачу</h2><form method="post" action="{% url 'workboard_task_edit' card.pk %}">{% csrf_token %}<input type="hidden" name="action" value="edit_item"><input type="hidden" name="item_id" value="{{ row.item.pk }}"><input name="name" maxlength="300" value="{{ row.item.display_name }}" required><textarea name="description" rows="3">{{ row.item.description }}</textarea><button type="submit" class="button-success">Сохранить</button><button type="button" class="button-secondary" onclick="this.closest('dialog').close()">Отмена</button></form></dialog>
-    <dialog id="new-step-{{ row.item.pk }}" class="wb-dialog"><h2>Новый этап</h2><form method="post" action="{% url 'workboard_task_edit' card.pk %}">{% csrf_token %}<input type="hidden" name="action" value="add_step"><input type="hidden" name="item_id" value="{{ row.item.pk }}"><input name="name" maxlength="300" placeholder="Название этапа" required><input name="criterion" maxlength="300" placeholder="Первый обязательный критерий" required><button type="submit" class="button-success">Сохранить</button><button type="button" class="button-secondary" onclick="this.closest('dialog').close()">Отмена</button></form></dialog>
+    <dialog id="edit-item-{{ row.item.pk }}" class="wb-dialog"><h2>Редактировать подзадачу</h2><form method="post" action="{% url 'workboard_task_edit' card.pk %}">{% csrf_token %}<input type="hidden" name="action" value="edit_item"><input type="hidden" name="item_id" value="{{ row.item.pk }}"><input class="form-control" name="name" maxlength="300" value="{{ row.item.display_name }}" required><textarea class="form-control" name="description" rows="3">{{ row.item.description }}</textarea><div class="wb-dialog-actions"><button type="button" class="button-secondary" onclick="this.closest('dialog').close()">Отмена</button><button type="submit" class="button-success">Сохранить</button></div></form></dialog>
+    <dialog id="new-step-{{ row.item.pk }}" class="wb-dialog"><h2>Новый этап</h2><form method="post" action="{% url 'workboard_task_edit' card.pk %}">{% csrf_token %}<input type="hidden" name="action" value="add_step"><input type="hidden" name="item_id" value="{{ row.item.pk }}"><input class="form-control" name="name" maxlength="300" placeholder="Название этапа" required><input class="form-control" name="criterion" maxlength="300" placeholder="Первый обязательный критерий" required><div class="wb-dialog-actions"><button type="button" class="button-secondary" onclick="this.closest('dialog').close()">Отмена</button><button type="submit" class="button-success">Сохранить</button></div></form></dialog>
     {% empty %}<p class="wb-hint">Подзадач пока нет. Для простой задачи они необязательны.</p>{% endfor %}
   </section>
-  <dialog id="edit-task" class="wb-dialog"><h2>Редактировать задачу</h2><form method="post" action="{% url 'workboard_task_edit' card.pk %}">{% csrf_token %}<input type="hidden" name="action" value="edit_task"><input name="name" maxlength="300" value="{{ card.task.name }}" required><textarea name="description" rows="3">{{ card.task.description }}</textarea><button type="submit" class="button-success">Сохранить</button><button type="button" class="button-secondary" onclick="this.closest('dialog').close()">Отмена</button></form></dialog>
-  <dialog id="new-item" class="wb-dialog"><h2>Новая подзадача</h2><form method="post" action="{% url 'workboard_task_edit' card.pk %}">{% csrf_token %}<input type="hidden" name="action" value="add_item"><input name="name" maxlength="300" placeholder="Название" required><textarea name="description" rows="3" placeholder="Описание"></textarea><button type="submit" class="button-success">Сохранить</button><button type="button" class="button-secondary" onclick="this.closest('dialog').close()">Отмена</button></form></dialog>
+  </div>
+  <dialog id="edit-task" class="wb-dialog"><h2>Редактировать задачу</h2><form method="post" action="{% url 'workboard_task_edit' card.pk %}">{% csrf_token %}<input type="hidden" name="action" value="edit_task"><input class="form-control" name="name" maxlength="300" value="{{ card.task.name }}" required><textarea class="form-control" name="description" rows="3">{{ card.task.description }}</textarea><div class="wb-dialog-actions"><button type="button" class="button-secondary" onclick="this.closest('dialog').close()">Отмена</button><button type="submit" class="button-success">Сохранить</button></div></form></dialog>
+  <dialog id="new-item" class="wb-dialog"><h2>Новая подзадача</h2><form method="post" action="{% url 'workboard_task_edit' card.pk %}">{% csrf_token %}<input type="hidden" name="action" value="add_item"><input class="form-control" name="name" maxlength="300" placeholder="Название" required><textarea class="form-control" name="description" rows="3" placeholder="Описание"></textarea><div class="wb-dialog-actions"><button type="button" class="button-secondary" onclick="this.closest('dialog').close()">Отмена</button><button type="submit" class="button-success">Сохранить</button></div></form></dialog>
 </main>
 <script>
 (function(){
  const key="workboard-task-open-{{ card.pk }}";
  const embedded=window.parent!==window && document.body.classList.contains("workspace-embedded");
  if(embedded) window.parent.postMessage({type:"ps-workboard-card-state",cardId:"{{ card.pk }}",columnId:"{{ card.column_id }}",name:"{{ card.task.name|escapejs }}",done:{{ progress.done }},total:{{ progress.total }},percent:{{ progress.percent|default_if_none:"null" }}},location.origin);
- const nodes=Array.from(document.querySelectorAll(".wb-task-page details"));
- try { const saved=JSON.parse(sessionStorage.getItem(key)); if(saved)nodes.forEach((n,i)=>{if(i<saved.length)n.open=saved[i]}); } catch(e){}
- document.addEventListener("submit",function(){try{sessionStorage.setItem(key,JSON.stringify(nodes.map(n=>n.open)))}catch(e){}});
+ const nodes=Array.from(document.querySelectorAll("[data-wb-detail]"));
+ try { const saved=JSON.parse(sessionStorage.getItem(key)); if(saved&&!Array.isArray(saved))nodes.forEach(n=>{if(Object.hasOwn(saved,n.dataset.wbDetail))n.open=saved[n.dataset.wbDetail]}); } catch(e){}
+ document.addEventListener("submit",function(){try{sessionStorage.setItem(key,JSON.stringify(Object.fromEntries(nodes.map(n=>[n.dataset.wbDetail,n.open]))))}catch(e){}});
 })();
 </script>
 {% endblock %}
