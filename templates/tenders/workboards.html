@@ -67,7 +67,8 @@
               <article class="workboards-card">
                 {% if card.task %}
                   <small>Задача</small>
-                  <h3>{{ card.task.name }}</h3>
+                  <h3><a href="{% url 'workboard_task_detail' card.pk %}">{{ card.task.name }}</a></h3>
+                  {% if card.progress.total %}<div class="wb-progress"><span>{{ card.progress.done }} из {{ card.progress.total }} подзадач</span><progress max="100" value="{{ card.progress.percent }}"></progress></div>{% endif %}
                   {% if card.task.description %}<p>{{ card.task.description|linebreaksbr }}</p>{% endif %}
                 {% else %}
                   <small>Тендер</small>

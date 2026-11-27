@@ -28,7 +28,7 @@ jobs:
           python manage.py test tenders.test_commercial_items --noinput -v 2
         continue-on-error: true
       - name: Ownership and working tree
-        run: python manage.py test tenders.test_workboard_ownership tenders.test_working_items tenders.test_workboards --noinput -v 2
+        run: python manage.py test tenders.test_workboard_ownership tenders.test_working_items tenders.test_workboards tenders.test_task_routes --noinput -v 2
       - name: Existing route regressions
         if: always()
         run: python manage.py test tenders.test_commercial_items --noinput -v 2

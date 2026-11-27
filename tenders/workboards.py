@@ -1,8 +1,11 @@
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Max
+from django.utils import timezone
+import uuid
 
-from .models import Task, WorkBoard, WorkBoardCard, WorkBoardColumn
+from .models import (Task, WorkBoard, WorkBoardCard, WorkBoardColumn, TenderCommercialItem,
+                     ComponentRoutePlan, ComponentOperationStep, WorkCheckpoint, WorkCheckpointEvent)
 
 
 def _clean_name(value, *, label, max_length):
@@ -81,7 +84,153 @@ def move_card(card, column):
     locked = WorkBoardCard.objects.select_for_update().get(pk=card.pk)
     if column.board_id != locked.board_id:
         raise ValidationError("Нельзя перенести карточку на чужую доску через выбор колонки.")
+    if locked.task_id and column.kind == WorkBoardColumn.Kind.DONE:
+        progress = task_progress(locked.task)
+        if progress["total"] and progress["done"] != progress["total"]:
+            raise ValidationError("Сначала завершите обязательные критерии всех подзадач.")
     locked.column = column
     locked.position = _next_card_position(column)
     locked.save(update_fields=["column", "position", "updated_at"])
     return locked
+
+
+def task_progress(task):
+    items = []
+    for item in task.commercial_items.filter(status="active").prefetch_related("route_plans__steps__checkpoints"):
+        plans = list(item.route_plans.all())
+        # Task MVP has one position-level route; never choose an ambiguous plan.
+        plan = plans[0] if len(plans) == 1 else None
+        steps = []
+        blocked = False
+        for step in plan.steps.all() if plan else []:
+            checks = list(step.checkpoints.all())
+            mandatory = [c for c in checks if c.required]
+            done = bool(mandatory) and all(c.completed_at for c in mandatory)
+            steps.append({"step": step, "checks": checks, "done": done and not blocked,
+                          "blocked": blocked, "done_count": sum(bool(c.completed_at) for c in mandatory),
+                          "total": len(mandatory)})
+            blocked = blocked or not done
+        items.append({"item": item, "steps": steps, "done": bool(steps) and all(s["done"] for s in steps),
+                      "done_count": sum(s["done_count"] for s in steps), "total": sum(s["total"] for s in steps)})
+    done = sum(i["done"] for i in items)
+    return {"items": items, "done": done, "total": len(items), "percent": round(100 * done / len(items)) if items else None}
+
+
+def _lock_task_card(card, actor):
+    locked = WorkBoardCard.objects.select_for_update().select_related("board", "column", "task").get(pk=card.pk)
+    from django.core.exceptions import PermissionDenied
+    if not actor.is_superuser and locked.board.created_by_id != actor.pk:
+        raise PermissionDenied
+    if not locked.task_id:
+        raise ValidationError("Редактирование ручного маршрута доступно только для задачи.")
+    return locked
+
+
+def _task_item(card, item_id):
+    from django.shortcuts import get_object_or_404
+    return get_object_or_404(TenderCommercialItem, pk=item_id, task_id=card.task_id, status="active")
+
+
+def _task_step(card, step_id):
+    from django.shortcuts import get_object_or_404
+    return get_object_or_404(ComponentOperationStep, pk=step_id, route_plan__commercial_item__task_id=card.task_id)
+
+
+def _reopen_if_needed(card):
+    if card.column.kind == WorkBoardColumn.Kind.DONE and task_progress(card.task)["done"] != task_progress(card.task)["total"]:
+        target = card.board.columns.filter(kind=WorkBoardColumn.Kind.STANDARD).first()
+        target = target or card.board.columns.get(kind=WorkBoardColumn.Kind.QUEUE)
+        card.column = target
+        card.position = _next_card_position(target)
+        card.save(update_fields=["column", "position", "updated_at"])
+
+
+@transaction.atomic
+def edit_task_work(card, actor, action, data):
+    """Shared server executor for task card mutations, scoped to the authorized card."""
+    card = _lock_task_card(card, actor)
+    if action in ("edit_task", "add_item", "edit_item", "add_step", "add_check"):
+        name = _clean_name(data.get("name"), label="название", max_length=300)
+    if action == "edit_task":
+        card.task.name = name
+        card.task.description = str(data.get("description") or "").strip()
+        card.task.save(update_fields=["name", "description"])
+    elif action == "add_item":
+        TenderCommercialItem.objects.create(task=card.task, source_key="task:" + uuid.uuid4().hex,
+                                            display_name=name, description=str(data.get("description") or "").strip())
+    elif action == "edit_item":
+        item = _task_item(card, data.get("item_id"))
+        item.display_name = name
+        item.description = str(data.get("description") or "").strip()
+        item.save(update_fields=["display_name", "description", "updated_at"])
+    elif action == "add_step":
+        item = _task_item(card, data.get("item_id"))
+        first = _clean_name(data.get("criterion"), label="обязательный критерий", max_length=300)
+        plan, _ = ComponentRoutePlan.objects.get_or_create(commercial_item=item, component=None,
+                                                           scope=ComponentRoutePlan.Scope.SHARED)
+        last = plan.steps.aggregate(value=Max("position"))["value"]
+        step = ComponentOperationStep.objects.create(route_plan=plan, manual_name=name, position=0 if last is None else last + 1)
+        WorkCheckpoint.objects.create(step=step, name=first, position=0)
+    elif action == "add_check":
+        step = _task_step(card, data.get("step_id"))
+        last = step.checkpoints.aggregate(value=Max("position"))["value"]
+        WorkCheckpoint.objects.create(step=step, name=name, position=0 if last is None else last + 1,
+                                      required=data.get("required") in (True, "1", "on"))
+    elif action == "toggle_check":
+        from django.shortcuts import get_object_or_404
+        checkpoint = get_object_or_404(WorkCheckpoint.objects.select_related("step"),
+                                        pk=data.get("checkpoint_id"), step__route_plan__commercial_item__task_id=card.task_id)
+        completed = data.get("completed") in (True, "1", "on")
+        if completed == bool(checkpoint.completed_at):
+            return card
+        step = checkpoint.step
+        if completed:
+            for previous in step.route_plan.steps.filter(position__lt=step.position).prefetch_related("checkpoints"):
+                required = [c for c in previous.checkpoints.all() if c.required]
+                if not required or not all(c.completed_at for c in required):
+                    raise ValidationError("Сначала завершите предыдущий этап.")
+        elif checkpoint.required and WorkCheckpoint.objects.filter(step__route_plan=step.route_plan,
+                        step__position__gt=step.position, completed_at__isnull=False).exists():
+            raise ValidationError("Сначала снимите отметки последующих этапов, чтобы сохранить историю.")
+        checkpoint.completed_at = timezone.now() if completed else None
+        checkpoint.completed_by = actor if completed else None
+        checkpoint.save(update_fields=["completed_at", "completed_by"])
+        WorkCheckpointEvent.objects.create(checkpoint=checkpoint, actor=actor, completed=completed)
+    else:
+        raise ValidationError("Неизвестное действие.")
+    _reopen_if_needed(card)
+    return card
+
+
+@transaction.atomic
+def create_task_from_plan(board, actor, payload):
+    """Generic structured import, no project-specific seed or alternate data store."""
+    from django.core.exceptions import PermissionDenied
+    if not actor.is_superuser and board.created_by_id != actor.pk:
+        raise PermissionDenied
+    if not isinstance(payload, dict):
+        raise ValidationError("Ожидается объект задачи.")
+    name = _clean_name(payload.get("name"), label="название задачи", max_length=300)
+    items = payload.get("items", [])
+    if not isinstance(items, list) or len(items) > 100:
+        raise ValidationError("Ожидается список до 100 подзадач.")
+    card = create_task_card(board, name=name, description=payload.get("description", ""))
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValidationError("Некорректная подзадача.")
+        edit_task_work(card, actor, "add_item", item)
+        position = card.task.commercial_items.latest("pk")
+        steps = item.get("steps", [])
+        if not isinstance(steps, list) or len(steps) > 100:
+            raise ValidationError("Ожидается список до 100 этапов.")
+        for step in steps:
+            if not isinstance(step, dict):
+                raise ValidationError("Некорректный этап.")
+            checks = step.get("checks", [])
+            if not isinstance(checks, list) or not checks or len(checks) > 100 or not all(isinstance(c, str) for c in checks):
+                raise ValidationError("У этапа должен быть список обязательных критериев.")
+            edit_task_work(card, actor, "add_step", {"item_id": position.pk, "name": step.get("name"), "criterion": checks[0]})
+            route_step = position.route_plans.get().steps.latest("position")
+            for criterion in checks[1:]:
+                edit_task_work(card, actor, "add_check", {"step_id": route_step.pk, "name": criterion, "required": True})
+    return card
