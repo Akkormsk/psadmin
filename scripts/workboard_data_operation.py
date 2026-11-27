@@ -2,7 +2,6 @@ import base64
 import json
 import os
 
-from django.contrib.auth import get_user_model
 from django.db import transaction
 
 from tenders.models import WorkBoard, WorkBoardCard
