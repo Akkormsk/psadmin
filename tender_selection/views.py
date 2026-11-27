@@ -735,7 +735,9 @@ def tender_detail(request, pk):
                     item["composition_question_id"] = question.pk
                     item["composition_options"] = list((question.possible_answers or {}).get("options", [])) if isinstance(question.possible_answers, dict) else []
     from .national_regime import annotation, source_item_status
-    for item in display_items:
+    for index, item in enumerate(display_items):
+        if not any(item.get(key) for key in ("commercial_id", "component_id", "source_id")):
+            item["product_edit_key"] = f"notice-{index}"
         if active_sources:
             source = next((source for source in active_sources if source.pk == item.get("source_id")), None)
             item["national_regime"] = source_item_status(source, card) if source else annotation()
