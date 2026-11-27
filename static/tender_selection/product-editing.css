@@ -18,3 +18,8 @@
 [data-products-editing] .ts-products-list{overflow-x:auto}
 [data-products-editing] [data-product-select]{pointer-events:none}
 .ts-product-title-edit{display:flex;align-items:center;gap:8px}.ts-product-title-edit h3{margin:0}.ts-product-rename{margin:0 0 16px;padding:14px;border:1px solid var(--border);border-radius:10px;background:var(--tint-neutral)}.ts-product-rename label{display:grid;gap:5px}.ts-product-rename label span{color:var(--ink-3);font-size:12px}.ts-product-rename input{width:100%;padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--ink)}.ts-product-rename>div{display:flex;gap:8px;flex-wrap:wrap}
+
+/* Keep the native picker full-name searchable; show only the symbol when closed. */
+.ts-product-unit-field select.ts-product-unit-select{color:transparent;text-shadow:none}
+.ts-product-unit-field select.ts-product-unit-select option{color:var(--ink);background:var(--surface)}
+.ts-product-unit-short{position:absolute;left:8px;right:22px;top:50%;transform:translateY(-50%);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;color:var(--ink);font-size:13px;line-height:1.2}

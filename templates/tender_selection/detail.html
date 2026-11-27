@@ -2,7 +2,7 @@
 {% load static tz tender_selection_extras %}
 
 {% block title %}{{ tender.title|default:tender.object_info|truncatechars:60 }}{% endblock %}
-{% block extra_head %}<link rel="stylesheet" href="{% static 'tender_selection/product-editing.css' %}?v=20261127-inline-product-editor-5"><link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}?v=20261127-product-editor-grid">{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'tender_selection/product-editing.css' %}?v=20261127-inline-product-editor-6"><link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}?v=20261127-product-editor-grid">{% endblock %}
 
 {% block content %}
 <div class="container ts-detail ts-detail--document" data-workspace-single-layer>
@@ -631,7 +631,7 @@
   @media (max-width: 640px) { .ts-dl > div { grid-template-columns: 1fr; gap: 2px; } .ts-risk-table th { white-space: normal; width: auto; } .ts-stage-summary { margin-left:22px; justify-content:flex-start; text-align:left; } .tender-saved-bid { align-items:flex-start; } }
 </style>
 <script src="{% static 'tender_selection/tabs.js' %}?v=20261119-route-blocks" defer></script>
-<script src="{% static 'tender_selection/product-editing.js' %}?v=20261127-inline-product-editor-5" defer></script>
+<script src="{% static 'tender_selection/product-editing.js' %}?v=20261127-inline-product-editor-6" defer></script>
 <script src="{% static 'tender_selection/products.js' %}?v=20261119-route-blocks" defer></script>
 {% include "tender_selection/_product_calculation_script.html" %}
 <script>
