@@ -5,7 +5,7 @@ import os
 from django.db import transaction
 
 from tenders.models import WorkBoard, WorkBoardCard
-from tenders.workboards import create_task_from_plan
+from tenders.workboards import create_task_from_plan, edit_task_work
 
 
 action = os.environ.get("WORKBOARD_DATA_ACTION", "").strip()
@@ -81,6 +81,7 @@ if action == "import":
     }
     created = []
     skipped = []
+    extended = []
     with transaction.atomic():
         for project in projects:
             key = project["name"].strip().casefold()
@@ -89,6 +90,39 @@ if action == "import":
                 continue
             card = create_task_from_plan(board, board.created_by, project)
             created.append({"name": project["name"], "card_id": card.pk})
+        for update in payload.get("updates", []):
+            card = WorkBoardCard.objects.select_related("task").get(
+                board=board,
+                task__name=update["name"],
+                task__isnull=False,
+            )
+            existing_items = {
+                value.casefold()
+                for value in card.task.commercial_items.filter(status="active")
+                .values_list("display_name", flat=True)
+            }
+            for item in update.get("items", []):
+                if item["name"].strip().casefold() in existing_items:
+                    continue
+                edit_task_work(card, board.created_by, "add_item", item)
+                position = card.task.commercial_items.latest("pk")
+                for step in item.get("steps", []):
+                    checks = step.get("checks", [])
+                    if not checks:
+                        raise RuntimeError("Every appended step requires checks")
+                    edit_task_work(card, board.created_by, "add_step", {
+                        "item_id": position.pk,
+                        "name": step["name"],
+                        "criterion": checks[0],
+                    })
+                    route_step = position.route_plans.get().steps.latest("position")
+                    for criterion in checks[1:]:
+                        edit_task_work(card, board.created_by, "add_check", {
+                            "step_id": route_step.pk,
+                            "name": criterion,
+                            "required": True,
+                        })
+                extended.append({"card_id": card.pk, "item": item["name"]})
         actual = WorkBoardCard.objects.filter(
             board=board,
             task__name__in=names,
@@ -114,5 +148,6 @@ if action == "import":
         "board_id": board.pk,
         "created": created,
         "skipped": skipped,
+        "extended": extended,
         "verification": verification,
     }, ensure_ascii=False))
