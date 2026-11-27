@@ -202,7 +202,7 @@ def workboard_task_import(request, board_id):
         return _board_redirect(board)
     if request.content_type == "application/json":
         return JsonResponse({"card_id": card.pk, "url": reverse("workboard_task_detail", args=[card.pk])}, status=201)
-    return redirect("workboard_task_detail", card_id=card.pk)
+    return _board_redirect(board)
 
 
 @login_required

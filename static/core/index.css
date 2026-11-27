@@ -410,6 +410,20 @@ h1 {
 
 /* ---------- buttons ---------- */
 
+/* Low-specificity default for every button, including new unclassified controls.
+   Explicit variants and specialised controls override this baseline. */
+:where(button, input[type=button], input[type=submit], input[type=reset]) {
+  appearance: none; box-sizing: border-box; min-height: 34px;
+  padding: 7px 14px; border: 1px solid var(--field-border);
+  border-radius: var(--radius-sm); background: var(--surface); color: var(--ink);
+  font: inherit; font-size: 13px; font-weight: 600; line-height: 1.35;
+  cursor: pointer; transition: background .15s ease, border-color .15s ease;
+}
+:where(button, input[type=button], input[type=submit], input[type=reset]):where(:hover:not(:disabled)) { background: var(--surface-2); }
+:where(button, input[type=button], input[type=submit], input[type=reset]):where(:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+:where(button, input[type=button], input[type=submit], input[type=reset]):where(:disabled) { opacity: .5; cursor: not-allowed; }
+
+
 .button-secondary,
 .button-success {
   display: inline-flex;

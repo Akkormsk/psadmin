@@ -103,3 +103,15 @@ class TaskRouteTests(TestCase):
         self.assertFalse(WorkCheckpointEvent.objects.filter(checkpoint_id__in=check_ids).exists())
         self.assertTrue(WorkBoardCard.objects.filter(pk=other.pk).exists())
         self.assertTrue(WorkCheckpointEvent.objects.filter(checkpoint_id=other_check.pk).exists())
+
+    def test_file_import_returns_to_board_with_task_in_queue(self):
+        import json
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        self.client.force_login(self.owner)
+        payload = {"name": "Импорт из файла", "items": self.payload["items"]}
+        upload = SimpleUploadedFile("plan.json", json.dumps(payload).encode(), content_type="application/json")
+        response = self.client.post(reverse("workboard_task_import", args=[self.board.pk]), {"plan_file": upload})
+        self.assertRedirects(response, f"{reverse('workboard_list')}?board={self.board.pk}")
+        card = WorkBoardCard.objects.get(board=self.board, task__name=payload["name"])
+        self.assertEqual(card.column.kind, WorkBoardColumn.Kind.QUEUE)
+        self.assertContains(self.client.get(response.url), payload["name"])
