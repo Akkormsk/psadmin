@@ -56,7 +56,7 @@ def workboard_list(request):
             WorkBoardColumn.objects.filter(board=selected).prefetch_related(
                 Prefetch(
                     "cards",
-                    queryset=WorkBoardCard.objects.select_related("task", "tender").order_by("position", "pk"),
+                    queryset=WorkBoardCard.objects.select_related("task", "tender").prefetch_related("task__commercial_items__route_plans__steps__checkpoints").order_by("position", "pk"),
                     to_attr="visible_cards",
                 )
             )
@@ -167,7 +167,15 @@ def workboard_task_edit(request, card_id):
 def workboard_task_import(request, board_id):
     board = _board_for_user(request.user, board_id)
     try:
-        payload = json.loads(request.body) if request.content_type == "application/json" else json.loads(request.POST.get("plan", ""))
+        if request.content_type == "application/json":
+            raw = request.body
+        elif request.FILES.get("plan_file"):
+            raw = request.FILES["plan_file"].read(256001)
+        else:
+            raw = request.POST.get("plan", "")
+        if len(raw) > 256000:
+            raise ValidationError("Файл задачи слишком большой.")
+        payload = json.loads(raw)
         card = create_task_from_plan(board, request.user, payload)
     except (ValueError, ValidationError) as error:
         message = _error_text(error) if isinstance(error, ValidationError) else "Некорректный JSON."

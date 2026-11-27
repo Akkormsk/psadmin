@@ -3,6 +3,8 @@ from django.db import transaction
 from django.db.models import Max
 from django.utils import timezone
 import uuid
+import hashlib
+import json
 
 from .models import (Task, WorkBoard, WorkBoardCard, WorkBoardColumn, TenderCommercialItem,
                      ComponentRoutePlan, ComponentOperationStep, WorkCheckpoint, WorkCheckpointEvent)
@@ -96,7 +98,9 @@ def move_card(card, column):
 
 def task_progress(task):
     items = []
-    for item in task.commercial_items.filter(status="active").prefetch_related("route_plans__steps__checkpoints"):
+    for item in task.commercial_items.all():
+        if item.status != "active":
+            continue
         plans = list(item.route_plans.all())
         # Task MVP has one position-level route; never choose an ambiguous plan.
         plan = plans[0] if len(plans) == 1 else None
@@ -117,7 +121,7 @@ def task_progress(task):
 
 
 def _lock_task_card(card, actor):
-    locked = WorkBoardCard.objects.select_for_update().select_related("board", "column", "task").get(pk=card.pk)
+    locked = WorkBoardCard.objects.select_for_update().get(pk=card.pk)
     from django.core.exceptions import PermissionDenied
     if not actor.is_superuser and locked.board.created_by_id != actor.pk:
         raise PermissionDenied
@@ -137,7 +141,10 @@ def _task_step(card, step_id):
 
 
 def _reopen_if_needed(card):
-    if card.column.kind == WorkBoardColumn.Kind.DONE and task_progress(card.task)["done"] != task_progress(card.task)["total"]:
+    if card.column.kind != WorkBoardColumn.Kind.DONE:
+        return
+    progress = task_progress(card.task)
+    if progress["done"] != progress["total"]:
         target = card.board.columns.filter(kind=WorkBoardColumn.Kind.STANDARD).first()
         target = target or card.board.columns.get(kind=WorkBoardColumn.Kind.QUEUE)
         card.column = target
@@ -214,7 +221,14 @@ def create_task_from_plan(board, actor, payload):
     items = payload.get("items", [])
     if not isinstance(items, list) or len(items) > 100:
         raise ValidationError("Ожидается список до 100 подзадач.")
+    board = WorkBoard.objects.select_for_update().get(pk=board.pk)
+    key = hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+    previous = WorkBoardCard.objects.filter(board=board, import_key=key).first()
+    if previous:
+        return previous
     card = create_task_card(board, name=name, description=payload.get("description", ""))
+    card.import_key = key
+    card.save(update_fields=["import_key", "updated_at"])
     for item in items:
         if not isinstance(item, dict):
             raise ValidationError("Некорректная подзадача.")

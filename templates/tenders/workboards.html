@@ -5,7 +5,7 @@
 
 {% block extra_head %}
   <link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}">
-  <link rel="stylesheet" href="{% static 'tenders/workboards.css' %}?v=20261127-2">
+  <link rel="stylesheet" href="{% static 'tenders/workboards.css' %}?v=20261127-task">
 {% endblock %}
 
 {% block content %}
@@ -47,7 +47,13 @@
         <input name="name" maxlength="300" placeholder="Что нужно сделать" required>
         <textarea name="description" rows="2" placeholder="Короткое пояснение — необязательно"></textarea>
         <button type="submit">Добавить в очередь</button><button type="button" class="wb-secondary" onclick="this.closest('dialog').close()">Отмена</button>
-      </form></dialog>
+      </form>
+      <details style="margin-top:14px"><summary>Импорт готовой задачи (JSON)</summary>
+        <form method="post" enctype="multipart/form-data" action="{% url 'workboard_task_import' selected_board.pk %}">{% csrf_token %}
+          <label>Файл плана <input type="file" name="plan_file" accept=".json,application/json" required></label>
+          <button type="submit" class="wb-secondary">Импортировать</button>
+        </form>
+      </details></dialog>
 
       <dialog id="wb-new-column" class="wb-dialog"><form method="post" action="{% url 'workboard_column_create' selected_board.pk %}">
         {% csrf_token %}

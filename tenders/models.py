@@ -1199,6 +1199,7 @@ class WorkBoardCard(models.Model):
     )
     position = models.PositiveIntegerField("Порядок", default=0)
     completed_at = models.DateTimeField("Завершена", null=True, blank=True)
+    import_key = models.CharField("Ключ импорта", max_length=64, null=True, blank=True, editable=False)
     created_at = models.DateTimeField("Создана", auto_now_add=True)
     updated_at = models.DateTimeField("Обновлена", auto_now=True)
 
@@ -1214,6 +1215,7 @@ class WorkBoardCard(models.Model):
                 ),
                 name="workboard_card_exactly_one_subject",
             ),
+            models.UniqueConstraint(fields=["board", "import_key"], name="unique_workboard_import_key"),
         ]
 
     def _column_kind(self, using):

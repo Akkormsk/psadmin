@@ -65,3 +65,14 @@ class TaskRouteTests(TestCase):
         self.assertEqual(response.status_code, 201)
         card = WorkBoardCard.objects.get(pk=response.json()["card_id"])
         self.assertEqual(task_progress(card.task)["total"], 1)
+        self.assertEqual(card.pk, self.card.pk)
+        self.assertEqual(WorkBoardCard.objects.count(), before)
+
+    def test_manual_stage_cannot_be_saved_for_commercial_item(self):
+        from tender_selection.models import Tender
+        from .models import TenderCommercialItem, ComponentRoutePlan, ComponentOperationStep
+        tender = Tender.objects.create(purchase_number="777", title="Печать")
+        item = TenderCommercialItem.objects.create(tender=tender, source_key="source", display_name="Печать")
+        plan = ComponentRoutePlan.objects.create(commercial_item=item, scope=ComponentRoutePlan.Scope.SHARED)
+        with self.assertRaises(ValidationError):
+            ComponentOperationStep.objects.create(route_plan=plan, manual_name="Ручной этап", position=0)

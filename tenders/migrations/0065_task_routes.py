@@ -6,6 +6,8 @@ import django.db.models.deletion
 class Migration(migrations.Migration):
     dependencies = [("tenders", "0064_workboards"), migrations.swappable_dependency(settings.AUTH_USER_MODEL)]
     operations = [
+        migrations.AddField(model_name="workboardcard", name="import_key", field=models.CharField(blank=True, editable=False, max_length=64, null=True, verbose_name="Ключ импорта")),
+        migrations.AddConstraint(model_name="workboardcard", constraint=models.UniqueConstraint(fields=("board", "import_key"), name="unique_workboard_import_key")),
         migrations.AddField(model_name="tendercommercialitem", name="description", field=models.TextField(blank=True, default="", verbose_name="Описание"), preserve_default=False),
         migrations.AlterField(model_name="componentoperationstep", name="process", field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, related_name="v2_operation_steps", to="tenders.processdefinition")),
         migrations.AddField(model_name="componentoperationstep", name="manual_name", field=models.CharField(blank=True, default="", max_length=300, verbose_name="Название ручного этапа")),
