@@ -51,3 +51,5 @@
 [data-board-move-status] { color:var(--negative-ink); font-size:13px; }
 .wb-card-delete { z-index:2; }
 @media (hover:none) { [data-board-card] .hover-action { opacity:1; pointer-events:auto; } }
+
+body.workspace-embedded .wb-task-page{max-width:none;width:100%;margin:0;padding:20px 24px 40px;box-sizing:border-box}.workspace-embedded .wb-task-page .wb-panel{background:var(--surface);box-shadow:none;border:0;border-radius:0;padding:12px 0 20px;margin:0;border-bottom:1px solid var(--separator)}.workspace-embedded .wb-task-page .wb-panel:last-of-type{border-bottom:0}

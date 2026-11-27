@@ -781,6 +781,10 @@
         };
         window.addEventListener("message", function (event) {
           if (event.origin !== location.origin || !layers.some(layer => layer.frame.contentWindow === event.source)) return;
+          if (event.data?.type === "ps-workboard-card-state") {
+            window.dispatchEvent(new CustomEvent("ps-workboard-card-state", {detail:event.data}));
+            return;
+          }
           if (event.data?.type === "ps-workspace-context" && event.data.context) {
             const layer = layers.find(layer => layer.frame.contentWindow === event.source);
             layer.context = event.data.context;

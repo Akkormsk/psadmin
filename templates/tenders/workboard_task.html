@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% load static %}
 {% block title %}{{ card.task.name }} — PSADMIN{% endblock %}
-{% block extra_head %}<link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}"><link rel="stylesheet" href="{% static 'tenders/workboards.css' %}?v=20261127-task">{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}"><link rel="stylesheet" href="{% static 'tenders/workboards.css' %}?v=20261127-7">{% endblock %}
 {% block content %}
-<main class="container workboards-page wb-task-page">
+<main class="container workboards-page wb-task-page" data-workspace-single-layer>
   <a class="back-link" href="{% url 'workboard_list' %}?board={{ card.board_id }}">← {{ card.board.name }}</a>
-  {% include "tender_selection/_nav.html" with active="workboards" %}
+  {% if not request.GET.workspace %}{% include "tender_selection/_nav.html" with active="workboards" %}{% endif %}
   {% for message in messages %}<p class="workboards-messages">{{ message }}</p>{% endfor %}
   <section class="panel wb-panel">
     <div class="wb-toolbar"><small>Задача · {{ card.column.name }}</small>
@@ -55,6 +55,8 @@
 <script>
 (function(){
  const key="workboard-task-open-{{ card.pk }}";
+ const embedded=window.parent!==window && document.body.classList.contains("workspace-embedded");
+ if(embedded) window.parent.postMessage({type:"ps-workboard-card-state",cardId:"{{ card.pk }}",columnId:"{{ card.column_id }}",name:"{{ card.task.name|escapejs }}",done:{{ progress.done }},total:{{ progress.total }},percent:{{ progress.percent|default_if_none:"null" }}},location.origin);
  const nodes=Array.from(document.querySelectorAll(".wb-task-page details"));
  try { const saved=JSON.parse(sessionStorage.getItem(key)); if(saved)nodes.forEach((n,i)=>{if(i<saved.length)n.open=saved[i]}); } catch(e){}
  document.addEventListener("submit",function(){try{sessionStorage.setItem(key,JSON.stringify(nodes.map(n=>n.open)))}catch(e){}});

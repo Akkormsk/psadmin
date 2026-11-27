@@ -4,8 +4,8 @@
 {% block title %}Тендеры{% endblock %}
 {% block extra_head %}
 <link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}?v=20261127-shared-kanban">
-<link rel="stylesheet" href="{% static 'tenders/workboards.css' %}?v=20261127-6">
-<script src="{% static 'tenders/workboards-drag.js' %}?v=1" defer></script>
+<link rel="stylesheet" href="{% static 'tenders/workboards.css' %}?v=20261127-7">
+<script src="{% static 'tenders/workboards-drag.js' %}?v=2" defer></script>
 {% endblock %}
 
 {% block content %}
@@ -71,15 +71,15 @@
           <header class="kb-column__head"><span>{{ column.name }}</span><small>{{ column.visible_cards|length }}</small></header>
           <div class="kb-column__cards">
             {% for card in column.visible_cards %}
-              <article class="kb-card" data-board-card data-move-url="{% url 'workboard_card_move' card.pk %}" draggable="true">
+              <article class="kb-card" data-board-card data-card-id="{{ card.pk }}" data-move-url="{% url 'workboard_card_move' card.pk %}" draggable="true">
                 <form class="kb-card__dismiss wb-card-delete" method="post" action="{% url 'workboard_card_delete' card.pk %}" onsubmit="return confirm('{% if card.task %}Удалить задачу, её подзадачи, маршруты и историю выполнения?{% else %}Убрать карточку с доски? Сам тендер сохранится.{% endif %}')">
                   {% csrf_token %}<button type="submit" class="hover-action" title="Удалить карточку" aria-label="Удалить карточку">×</button>
                 </form>
                 {% if card.task %}
-                  <a class="kb-card__title wb-card-open" draggable="false" href="{% url 'workboard_task_detail' card.pk %}">{{ card.task.name }}</a>
-                  {% if card.progress.total %}<div class="wb-card-progress"><div><span>{{ card.progress.done }} из {{ card.progress.total }} подзадач</span><span>{{ card.progress.percent }}%</span></div><progress max="100" value="{{ card.progress.percent }}" aria-label="Выполнение подзадач"></progress></div>{% endif %}
+                  <a class="kb-card__title wb-card-open" draggable="false" data-workspace-open data-workspace-title="{{ card.task.name }}" href="{% url 'workboard_task_detail' card.pk %}">{{ card.task.name }}</a>
+                  {% if card.progress.total %}<div class="wb-card-progress"><div><span data-progress-count>{{ card.progress.done }} из {{ card.progress.total }} подзадач</span><span data-progress-percent>{{ card.progress.percent }}%</span></div><progress max="100" value="{{ card.progress.percent }}" aria-label="Выполнение подзадач"></progress></div>{% endif %}
                 {% else %}
-                  <a class="kb-card__title wb-card-open" draggable="false" href="{% url 'tender_selection:detail' card.tender.pk %}">{{ card.tender.title|default:card.tender.object_info|default:card.tender.purchase_number }}</a>
+                  <a class="kb-card__title wb-card-open" draggable="false" data-workspace-open data-workspace-title="Тендер № {{ card.tender.purchase_number }}" href="{% url 'tender_selection:detail' card.tender.pk %}">{{ card.tender.title|default:card.tender.object_info|default:card.tender.purchase_number }}</a>
                   <div class="kb-card__meta">№ {{ card.tender.purchase_number }}</div>
                 {% endif %}
               </article>

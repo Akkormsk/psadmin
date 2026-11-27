@@ -8,7 +8,36 @@
     const card = e.target.closest('[data-board-card]');
     if (!card) return;
     if (busy || suppressClick) { e.preventDefault(); return; }
-    if (!e.target.closest('a,button,form')) location.assign(card.querySelector('.wb-card-open').href);
+    if (!e.target.closest('a,button,form')) card.querySelector('.wb-card-open').click();
+  });
+  window.addEventListener('ps-workboard-card-state', event => {
+    const data = event.detail;
+    const card = [...board.querySelectorAll('[data-board-card]')].find(n => n.dataset.cardId === String(data.cardId));
+    const column = [...board.querySelectorAll('[data-board-column]')].find(n => n.dataset.boardColumn === String(data.columnId));
+    if (!card || !column) return;
+    const link = card.querySelector('.wb-card-open');
+    link.textContent = data.name; link.dataset.workspaceTitle = data.name;
+    let progress = card.querySelector('.wb-card-progress');
+    if (data.total > 0) {
+      if (!progress) {
+        progress = document.createElement('div'); progress.className='wb-card-progress';
+        progress.innerHTML='<div><span data-progress-count></span><span data-progress-percent></span></div><progress max="100" aria-label="Выполнение подзадач"></progress>';
+        card.append(progress);
+      }
+      progress.querySelector('[data-progress-count]').textContent = data.done+' из '+data.total+' подзадач';
+      progress.querySelector('[data-progress-percent]').textContent = data.percent+'%';
+      progress.querySelector('progress').value = data.percent;
+    } else progress?.remove();
+    if (card.closest('[data-board-column]') !== column) {
+      column.querySelector('.kb-column__cards').append(card);
+      board.querySelectorAll('[data-board-column]').forEach(col => {
+        const count=col.querySelectorAll('[data-board-card]').length;
+        col.querySelector('.kb-column__head small').textContent=count;
+        const list=col.querySelector('.kb-column__cards');
+        list.querySelector('.kb-column__empty')?.remove();
+        if (!count) { const empty=document.createElement('p'); empty.className='kb-column__empty'; empty.textContent='Пусто'; list.append(empty); }
+      });
+    }
   });
   board.addEventListener('dragstart', e => {
     const card = e.target.closest('[data-board-card]');

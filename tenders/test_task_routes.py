@@ -115,3 +115,19 @@ class TaskRouteTests(TestCase):
         card = WorkBoardCard.objects.get(board=self.board, task__name=payload["name"])
         self.assertEqual(card.column.kind, WorkBoardColumn.Kind.QUEUE)
         self.assertContains(self.client.get(response.url), payload["name"])
+
+    def test_task_uses_shared_workspace_and_post_stays_embedded(self):
+        self.client.force_login(self.owner)
+        board = self.client.get(reverse("workboard_list") + f"?board={self.board.pk}")
+        self.assertContains(board, 'data-workspace-title="Надёжность чтения"')
+        self.assertContains(board, 'data-workspace-open')
+        url = reverse("workboard_task_detail", args=[self.card.pk])
+        embedded = self.client.get(url + "?workspace=1")
+        self.assertEqual(embedded.headers["X-Frame-Options"], "SAMEORIGIN")
+        self.assertNotContains(embedded, 'id="assistant-launcher"')
+        self.assertContains(embedded, 'data-workspace-single-layer')
+        self.assertContains(embedded, 'ps-workboard-card-state')
+        response = self.client.post(reverse("workboard_task_edit", args=[self.card.pk]) + "?workspace=1",
+                                    {"action": "toggle_check", "checkpoint_id": self.checks[0].pk, "completed": "1"})
+        self.assertRedirects(response, url + "?workspace=1")
+        self.assertTrue(WorkCheckpoint.objects.get(pk=self.checks[0].pk).completed_at)
