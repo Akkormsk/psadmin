@@ -4,7 +4,7 @@
 {% block title %}Тендеры{% endblock %}
 {% block extra_head %}
 <link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}?v=20261127-shared-kanban">
-<link rel="stylesheet" href="{% static 'tenders/workboards.css' %}?v=20261127-3">
+<link rel="stylesheet" href="{% static 'tenders/workboards.css' %}?v=20261127-4">
 {% endblock %}
 
 {% block content %}
@@ -51,6 +51,12 @@
           <textarea class="form-control" name="description" rows="2" placeholder="Короткое пояснение — необязательно"></textarea>
           <div class="wb-actions"><button type="submit" class="button-success">Добавить в очередь</button><button type="button" class="button-secondary" onclick="this.closest('dialog').close()">Отмена</button></div>
         </form>
+        <details style="margin-top:14px"><summary>Импорт готовой задачи (JSON)</summary>
+          <form method="post" enctype="multipart/form-data" action="{% url 'workboard_task_import' selected_board.pk %}">{% csrf_token %}
+            <label>Файл плана <input type="file" name="plan_file" accept=".json,application/json" required></label>
+            <button type="submit" class="button-secondary">Импортировать</button>
+          </form>
+        </details>
       </dialog>
       <dialog id="wb-new-column" class="wb-dialog">
         <form method="post" action="{% url 'workboard_column_create' selected_board.pk %}">
@@ -69,8 +75,9 @@
               <article class="kb-card">
                 {% if card.task %}
                   <small class="kb-card__meta">Задача</small>
-                  <div class="kb-card__head"><strong class="kb-card__title">{{ card.task.name }}</strong></div>
+                  <div class="kb-card__head"><a class="kb-card__title" href="{% url 'workboard_task_detail' card.pk %}">{{ card.task.name }}</a></div>
                   {% if card.task.description %}<div class="kb-card__customer">{{ card.task.description|linebreaksbr }}</div>{% endif %}
+                  {% if card.progress.total %}<div class="wb-progress"><span>{{ card.progress.done }} из {{ card.progress.total }} подзадач</span><progress max="100" value="{{ card.progress.percent }}"></progress></div>{% endif %}
                 {% else %}
                   <small class="kb-card__meta">Тендер</small>
                   <div class="kb-card__head"><a class="kb-card__title" href="{% url 'tender_selection:detail' card.tender.pk %}">{{ card.tender.title|default:card.tender.object_info|default:card.tender.purchase_number }}</a></div>
