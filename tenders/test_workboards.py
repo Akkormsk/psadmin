@@ -107,7 +107,7 @@ class WorkBoardViewTests(TestCase):
         )
 
     def test_board_page_shows_task_and_required_columns(self):
-        create_task_card(self.board, name="Залить на тест")
+        create_task_card(self.board, name="Залить на тест", description="Скрытое подробное описание")
         self.client.force_login(self.owner)
 
         response = self.client.get(f"{reverse('workboard_list')}?board={self.board.pk}")
@@ -118,6 +118,9 @@ class WorkBoardViewTests(TestCase):
         self.assertContains(response, '<h1>Тендеры</h1>', html=True)
         self.assertContains(response, 'class="panel ts-sheet workboards-page"')
         self.assertContains(response, 'class="kb-card"')
+        self.assertContains(response, 'draggable="true"')
+        self.assertNotContains(response, 'Скрытое подробное описание')
+        self.assertNotContains(response, 'class="workboards-move-form"')
         self.assertIsNone(response.context["nav_counts"])
 
     def test_admin_board_uses_existing_trading_navigation_counts(self):
@@ -153,3 +156,29 @@ class WorkBoardViewTests(TestCase):
         page = self.client.get(reverse("workboard_list"))
         self.assertContains(page, "workboards.css")
         self.assertNotContains(page, "Выберите тендер")
+
+    def test_drag_move_and_delete_permissions(self):
+        card = create_task_card(self.board, name="Перенос и удаление")
+        task = card.task
+        done = self.board.columns.get(kind=WorkBoardColumn.Kind.DONE)
+        move_url = reverse("workboard_card_move", args=[card.pk])
+        delete_url = reverse("workboard_card_delete", args=[card.pk])
+        self.client.force_login(self.other)
+        self.assertEqual(self.client.post(delete_url).status_code, 403)
+        self.assertEqual(self.client.post(move_url, {"column_id": done.pk}, HTTP_ACCEPT="application/json").status_code, 403)
+        self.client.force_login(self.owner)
+        self.assertEqual(self.client.post(move_url, {"column_id": done.pk}, HTTP_ACCEPT="application/json").json(), {"ok": True})
+        card.refresh_from_db()
+        self.assertEqual(card.column_id, done.pk)
+        self.assertEqual(self.client.get(delete_url).status_code, 405)
+        self.assertEqual(self.client.post(delete_url).status_code, 302)
+        self.assertFalse(WorkBoardCard.objects.filter(pk=card.pk).exists())
+        self.assertFalse(type(task).objects.filter(pk=task.pk).exists())
+
+    def test_delete_tender_card_preserves_tender(self):
+        tender = Tender.objects.create(purchase_number="delete-card", title="Тендер", outcome_status=Tender.OUTCOME_WON)
+        card = create_tender_card(self.board, tender)
+        self.client.force_login(self.owner)
+        self.assertEqual(self.client.post(reverse("workboard_card_delete", args=[card.pk])).status_code, 302)
+        self.assertTrue(Tender.objects.filter(pk=tender.pk).exists())
+        self.assertFalse(WorkBoardCard.objects.filter(pk=card.pk).exists())

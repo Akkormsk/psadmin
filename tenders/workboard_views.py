@@ -2,6 +2,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models import Prefetch
+from django.db import transaction
 from django.http import Http404, JsonResponse
 import json
 from django.shortcuts import get_object_or_404, redirect, render
@@ -142,10 +143,16 @@ def workboard_card_move(request, card_id):
     card = get_object_or_404(WorkBoardCard.objects.select_related("board"), pk=card_id)
     board = _board_for_user(request.user, card.board_id)
     column = get_object_or_404(WorkBoardColumn, pk=request.POST.get("column_id"), board=board)
+    json_response = request.headers.get("Accept") == "application/json"
     try:
         move_card(card, column)
     except ValidationError as error:
+        if json_response:
+            return JsonResponse({"error": _error_text(error)}, status=400)
         messages.error(request, _error_text(error))
+    else:
+        if json_response:
+            return JsonResponse({"ok": True})
     if request.POST.get("from_task") == "1" and card.task_id:
         return redirect("workboard_task_detail", card_id=card.pk)
     return _board_redirect(board)
@@ -196,3 +203,17 @@ def workboard_task_import(request, board_id):
     if request.content_type == "application/json":
         return JsonResponse({"card_id": card.pk, "url": reverse("workboard_task_detail", args=[card.pk])}, status=201)
     return redirect("workboard_task_detail", card_id=card.pk)
+
+
+@login_required
+@require_POST
+@transaction.atomic
+def workboard_card_delete(request, card_id):
+    card = get_object_or_404(WorkBoardCard.objects.select_for_update(), pk=card_id)
+    board = _board_for_user(request.user, card.board_id)
+    # A task belongs to its card; the tender is a separate trading entity.
+    if card.task_id:
+        card.task.delete()
+    else:
+        card.delete()
+    return _board_redirect(board)

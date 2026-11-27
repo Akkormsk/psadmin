@@ -34,3 +34,20 @@
 .wb-task-page{max-width:1050px}.wb-task-page h1{text-align:left;font-size:22px;line-height:1.4;margin:10px 0}.wb-task-page h2{font-size:16px;margin:0}.wb-task-page h3{font-size:14px}.wb-task-page .wb-panel{margin-bottom:14px}.wb-task-page .workboards-move-form{border:0;margin:0;padding:0}.wb-progress{display:grid;gap:6px;margin:10px 0;font-size:12px;color:var(--ink-3,#757d85)}.wb-progress progress{width:100%;height:6px;accent-color:var(--accent)}.wb-item{border:1px solid var(--line,#e0e4e6);border-radius:8px;margin:9px 0}.wb-item summary,.wb-stage summary{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px;font-weight:600}.wb-item summary::after,.wb-stage summary::after{content:"⌄";margin-left:5px}.wb-item[open]>summary::after,.wb-stage[open]>summary::after{content:"⌃"}.wb-item summary span,.wb-stage summary span{flex:1}.wb-item summary small,.wb-stage summary small{font-size:12px;color:var(--ink-3,#79838a);font-weight:400}.wb-item-body{padding:0 14px 14px;border-top:1px solid var(--line,#e0e4e6)}.wb-route{border-left:1px solid #9cb3a2;padding-left:14px;margin-left:8px}.wb-stage{border:1px solid #8ca99555;background:#71947d12;border-radius:7px;margin:8px 0}.wb-stage-body{padding:0 12px 10px}.wb-check{display:flex;align-items:center;gap:8px;border-top:1px solid #8ca99533;padding:8px 0}.workboards-page .wb-check-button,.workboards-page .wb-icon,.workboards-page .wb-link{background:none;border:0;color:inherit;padding:4px 6px}.wb-check-button{font-size:18px!important}.wb-check-button:disabled{opacity:.4;cursor:not-allowed}.wb-checked{text-decoration:line-through;color:var(--ink-3,#78877d)}.wb-hint{color:var(--ink-3,#78838a);font-size:12px}.wb-task-page .wb-toolbar{flex-wrap:wrap}
 
 .wb-task-page .wb-panel{padding:16px}.wb-task-page .wb-secondary{border:1px solid var(--field-border);background:var(--surface);color:var(--ink)}
+
+/* Compact cards: no editing controls on the face. */
+[data-workboard] .kb-column { min-height:180px; border-radius:var(--radius-sm); }
+[data-board-card] { cursor:grab; gap:8px; }
+[data-board-card] .wb-card-open { padding-right:20px; cursor:inherit; }
+[data-board-card]:hover { border-color:var(--border-positive); }
+[data-board-card].is-dragging { opacity:.45; cursor:grabbing; }
+[data-board-column].is-drop-target { background:var(--tint-positive); outline:1px dashed var(--border-positive); outline-offset:3px; }
+.wb-card-progress { display:grid; gap:6px; margin-top:4px; font-size:11px; color:var(--ink-3); }
+.wb-card-progress > div { display:flex; justify-content:space-between; gap:8px; }
+.wb-card-progress progress { appearance:none; width:100%; height:4px; border:0; border-radius:4px; background:var(--separator); overflow:hidden; }
+.wb-card-progress progress::-webkit-progress-bar { background:var(--separator); border-radius:4px; }
+.wb-card-progress progress::-webkit-progress-value { background:var(--accent-fill); border-radius:4px; }
+.wb-card-progress progress::-moz-progress-bar { background:var(--accent-fill); border-radius:4px; }
+[data-board-move-status] { color:var(--negative-ink); font-size:13px; }
+.wb-card-delete { z-index:2; }
+@media (hover:none) { [data-board-card] .hover-action { opacity:1; pointer-events:auto; } }

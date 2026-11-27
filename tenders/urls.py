@@ -12,6 +12,7 @@ urlpatterns = [
     path("boards/cards/<int:card_id>/task/edit/", workboard_views.workboard_task_edit, name="workboard_task_edit"),
     path("boards/<int:board_id>/tasks/import/", workboard_views.workboard_task_import, name="workboard_task_import"),
     path("boards/cards/<int:card_id>/move/", workboard_views.workboard_card_move, name="workboard_card_move"),
+    path("boards/cards/<int:card_id>/delete/", workboard_views.workboard_card_delete, name="workboard_card_delete"),
     path("assistant/", assistant_ui.console, name="assistant_console"),
     path("assistant/conversations/", assistant_ui.conversations, name="assistant_conversations"),
     path("assistant/conversations/clear/", assistant_ui.conversations_clear, name="assistant_conversations_clear"),
