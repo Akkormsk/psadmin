@@ -115,6 +115,22 @@ class WorkBoardViewTests(TestCase):
         self.assertContains(response, "Залить на тест")
         self.assertContains(response, "В очереди")
         self.assertContains(response, "Готово")
+        self.assertContains(response, '<h1>Тендеры</h1>', html=True)
+        self.assertContains(response, 'class="panel ts-sheet workboards-page"')
+        self.assertContains(response, 'class="kb-card"')
+        self.assertIsNone(response.context["nav_counts"])
+
+    def test_admin_board_uses_existing_trading_navigation_counts(self):
+        admin = get_user_model().objects.create_superuser("board-nav-admin", "nav@example.test", "password")
+        self.client.force_login(admin)
+        from tender_selection.models import FilterSettings
+        from tender_selection.views import _incoming_count, _board_count
+
+        settings = FilterSettings.load()
+        response = self.client.get(reverse("workboard_list"))
+        self.assertEqual(response.context["nav_counts"], {
+            "incoming": _incoming_count(settings), "board": _board_count(settings),
+        })
 
     def test_superuser_can_add_won_tender(self):
         admin = get_user_model().objects.create_superuser("board-admin", "admin@example.test", "password")

@@ -480,3 +480,34 @@ body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel { pad
 .ts-route-assumption > summary { cursor:pointer; font-size:12px; font-weight:400; color:var(--ink-3); }
 .ts-route-assumption > p { margin:6px 0 0; }
 [data-analysis-result]:has(.ts-products-workspace.has-selection) [data-product-view-actions] { display:none !important; }
+
+/* Shared kanban presentation: trading and execution boards. */
+.kb-board { display: flex; gap: 14px; overflow-x: auto; padding: 4px 2px 10px; scroll-snap-type: x proximity; }
+  .kb-column { flex: 0 0 300px; scroll-snap-align: start; }
+  .kb-column__head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; font-weight: 600; }
+  .kb-column__head small { color: var(--ink-3); font-weight: 500; }
+  .kb-column__meta { display: inline-flex; align-items: baseline; gap: 6px; }
+  .kb-sortarrow { color: var(--ink-3); text-decoration: none; font-weight: 700; padding: 0 2px; }
+  .kb-sortarrow:hover { color: var(--ink); }
+  .kb-column__cards { display: grid; gap: 10px; }
+  .kb-column__empty { margin: 0; padding: 12px 0; color: var(--ink-3); font-size: 13px; }
+
+  .kb-card { position: relative; display: grid; gap: 6px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-card); }
+  .kb-card__dismiss { position: absolute; top: 6px; right: 6px; }
+  .kb-card:hover .hover-action, .kb-card:focus-within .hover-action { opacity: 1; pointer-events: auto; }
+  .kb-card__head { display: flex; align-items: start; justify-content: space-between; gap: 8px; }
+  .kb-card__title { flex: 1 1 auto; min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; font-size: 13px; font-weight: 600; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
+  .kb-card__title:hover { color: var(--ink); opacity: .8; }
+  .kb-card__meta { color: var(--ink-3); font-size: 11px; overflow-wrap: anywhere; }
+  .kb-card__customer { color: var(--ink-2); font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
+  .kb-card__row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .kb-card__row small { color: var(--ink-3); white-space: nowrap; }
+  .kb-card__deadline { font-size: 10px; }
+  .kb-card__deadline.is-soon { color: var(--negative-ink) !important; font-weight: 600; }
+  .kb-card__badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+
+  .kb-settings { font-size: 16px; }
+
+  @media (max-width: 768px) {
+    .kb-column { flex-basis: 82vw; }
+    }

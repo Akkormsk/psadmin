@@ -1,102 +1,98 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}Доски — PSADMIN{% endblock %}
-
+{% block title %}Тендеры{% endblock %}
 {% block extra_head %}
-  <link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}">
-  <link rel="stylesheet" href="{% static 'tenders/workboards.css' %}?v=20261127-2">
+<link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}?v=20261127-shared-kanban">
+<link rel="stylesheet" href="{% static 'tenders/workboards.css' %}?v=20261127-3">
 {% endblock %}
 
 {% block content %}
-<main class="container workboards-page">
+<div class="container">
+  <a href="/" class="back-link">← На главную</a>
+  <h1>Тендеры</h1>
   {% include "tender_selection/_nav.html" with active="workboards" %}
-
-  <header class="workboards-head">
-    <div>
-      <h1>Доски</h1>
-      <p>Задачи и исполнение выигранных тендеров в одном рабочем пространстве.</p>
+  <section class="panel ts-sheet workboards-page">
+    <div class="ts-head">
+      <h2 class="ts-head__title">Доски</h2>
+      <div class="ts-row__actions">
+        <button type="button" class="button-secondary" onclick="document.getElementById('wb-new-board').showModal()">+ Новая доска</button>
+      </div>
     </div>
-    <button type="button" onclick="document.getElementById('wb-new-board').showModal()">+ Новая доска</button>
-    <dialog id="wb-new-board" class="wb-dialog"><h2>Новая доска</h2><form method="post" action="{% url 'workboard_create' %}" class="workboards-inline-form">
-      {% csrf_token %}
-      <input name="name" maxlength="200" placeholder="Название новой доски" required>
-      <button type="submit">Создать доску</button>
-      <button type="button" class="wb-secondary" onclick="this.closest('dialog').close()">Отмена</button>
-    </form></dialog>
-  </header>
-
-  {% if messages %}
-    <div class="workboards-messages">
-      {% for message in messages %}<p>{{ message }}</p>{% endfor %}
-    </div>
-  {% endif %}
-
-  {% if boards %}
-    <nav class="workboards-switcher" aria-label="Выбор доски">
-      {% for board in boards %}
-        <a href="{% url 'workboard_list' %}?board={{ board.pk }}"{% if board.pk == selected_board.pk %} class="is-active" aria-current="page"{% endif %}>{{ board.name }}</a>
-      {% endfor %}
-    </nav>
-
-    <section class="panel wb-panel"><div class="wb-toolbar"><strong>{{ selected_board.name }}</strong><div><button type="button" class="wb-secondary" onclick="document.getElementById('wb-new-column').showModal()">+ Колонка</button> <button type="button" onclick="document.getElementById('wb-new-task').showModal()">+ Задача</button></div></div>
-    <div class="workboards-tools">
-      <dialog id="wb-new-task" class="wb-dialog"><form method="post" action="{% url 'workboard_task_create' selected_board.pk %}">
+    <dialog id="wb-new-board" class="wb-dialog">
+      <form method="post" action="{% url 'workboard_create' %}">
         {% csrf_token %}
-        <h2>Новая задача</h2>
-        <input name="name" maxlength="300" placeholder="Что нужно сделать" required>
-        <textarea name="description" rows="2" placeholder="Короткое пояснение — необязательно"></textarea>
-        <button type="submit">Добавить в очередь</button><button type="button" class="wb-secondary" onclick="this.closest('dialog').close()">Отмена</button>
-      </form></dialog>
-
-      <dialog id="wb-new-column" class="wb-dialog"><form method="post" action="{% url 'workboard_column_create' selected_board.pk %}">
-        {% csrf_token %}
-        <h2>Новая колонка</h2>
-        <input name="name" maxlength="120" placeholder="Например, В работе" required>
-        <button type="submit">Добавить колонку</button><button type="button" class="wb-secondary" onclick="this.closest('dialog').close()">Отмена</button>
-      </form></dialog>
-
-    </div>
-
-    <section class="workboards-board" aria-label="{{ selected_board.name }}">
-      {% for column in columns %}
-        <section class="workboards-column">
-          <header><h2>{{ column.name }}</h2><span>{{ column.visible_cards|length }}</span></header>
-          <div class="workboards-cards">
+        <h2>Новая доска</h2>
+        <input class="form-control" name="name" maxlength="200" placeholder="Название новой доски" required>
+        <div class="wb-actions"><button type="submit" class="button-success">Создать</button><button type="button" class="button-secondary" onclick="this.closest('dialog').close()">Отмена</button></div>
+      </form>
+    </dialog>
+    {% if messages %}
+      <div class="workboards-messages" role="status">{% for message in messages %}<p>{{ message }}</p>{% endfor %}</div>
+    {% endif %}
+    {% if boards %}
+      <nav class="workboards-switcher" aria-label="Выбор доски">
+        <div class="ts-seg ts-seg--sm">
+          {% for board in boards %}<a href="{% url 'workboard_list' %}?board={{ board.pk }}"{% if board.pk == selected_board.pk %} class="is-active" aria-current="page"{% endif %}>{{ board.name }}</a>{% endfor %}
+        </div>
+      </nav>
+      <div class="wb-toolbar">
+        <strong>{{ selected_board.name }}</strong>
+        <div class="wb-actions">
+          <button type="button" class="button-secondary" onclick="document.getElementById('wb-new-column').showModal()">+ Колонка</button>
+          <button type="button" class="button-secondary" onclick="document.getElementById('wb-new-task').showModal()">+ Задача</button>
+        </div>
+      </div>
+      <dialog id="wb-new-task" class="wb-dialog">
+        <form method="post" action="{% url 'workboard_task_create' selected_board.pk %}">
+          {% csrf_token %}
+          <h2>Новая задача</h2>
+          <input class="form-control" name="name" maxlength="300" placeholder="Что нужно сделать" required>
+          <textarea class="form-control" name="description" rows="2" placeholder="Короткое пояснение — необязательно"></textarea>
+          <div class="wb-actions"><button type="submit" class="button-success">Добавить в очередь</button><button type="button" class="button-secondary" onclick="this.closest('dialog').close()">Отмена</button></div>
+        </form>
+      </dialog>
+      <dialog id="wb-new-column" class="wb-dialog">
+        <form method="post" action="{% url 'workboard_column_create' selected_board.pk %}">
+          {% csrf_token %}
+          <h2>Новая колонка</h2>
+          <input class="form-control" name="name" maxlength="120" placeholder="Например, В работе" required>
+          <div class="wb-actions"><button type="submit" class="button-success">Добавить колонку</button><button type="button" class="button-secondary" onclick="this.closest('dialog').close()">Отмена</button></div>
+        </form>
+      </dialog>
+      <section class="kb-board" aria-label="{{ selected_board.name }}">
+        {% for column in columns %}
+        <section class="kb-column">
+          <header class="kb-column__head"><span>{{ column.name }}</span><small>{{ column.visible_cards|length }}</small></header>
+          <div class="kb-column__cards">
             {% for card in column.visible_cards %}
-              <article class="workboards-card">
+              <article class="kb-card">
                 {% if card.task %}
-                  <small>Задача</small>
-                  <h3>{{ card.task.name }}</h3>
-                  {% if card.task.description %}<p>{{ card.task.description|linebreaksbr }}</p>{% endif %}
+                  <small class="kb-card__meta">Задача</small>
+                  <div class="kb-card__head"><strong class="kb-card__title">{{ card.task.name }}</strong></div>
+                  {% if card.task.description %}<div class="kb-card__customer">{{ card.task.description|linebreaksbr }}</div>{% endif %}
                 {% else %}
-                  <small>Тендер</small>
-                  <h3><a href="{% url 'tender_selection:detail' card.tender.pk %}">{{ card.tender.title|default:card.tender.object_info|default:card.tender.purchase_number }}</a></h3>
-                  <p>Закупка № {{ card.tender.purchase_number }}</p>
+                  <small class="kb-card__meta">Тендер</small>
+                  <div class="kb-card__head"><a class="kb-card__title" href="{% url 'tender_selection:detail' card.tender.pk %}">{{ card.tender.title|default:card.tender.object_info|default:card.tender.purchase_number }}</a></div>
+                  <div class="kb-card__meta">Закупка № {{ card.tender.purchase_number }}</div>
                 {% endif %}
                 <form method="post" action="{% url 'workboard_card_move' card.pk %}" class="workboards-move-form">
                   {% csrf_token %}
-                  <label for="column-{{ card.pk }}">Переместить</label>
-                  <select id="column-{{ card.pk }}" name="column_id">
-                    {% for target in columns %}
-                      <option value="{{ target.pk }}"{% if target.pk == column.pk %} selected{% endif %}>{{ target.name }}</option>
-                    {% endfor %}
+                  <label class="wb-visually-hidden" for="column-{{ card.pk }}">Переместить</label>
+                  <select class="form-control" data-customized="true" id="column-{{ card.pk }}" name="column_id">
+                    {% for target in columns %}<option value="{{ target.pk }}"{% if target.pk == column.pk %} selected{% endif %}>{{ target.name }}</option>{% endfor %}
                   </select>
-                  <button type="submit">Перенести</button>
+                  <button type="submit" class="button-secondary">Перенести</button>
                 </form>
               </article>
-            {% empty %}
-              <p class="workboards-empty-column">Пока пусто</p>
-            {% endfor %}
+            {% empty %}<p class="kb-column__empty">Пусто</p>{% endfor %}
           </div>
         </section>
-      {% endfor %}
-    </section></section>
-  {% else %}
-    <section class="workboards-empty">
-      <h2>Создайте первую доску</h2>
-      <p>В ней сразу появятся колонки «В очереди» и «Готово».</p><button type="button" onclick="document.getElementById('wb-new-board').showModal()">+ Создать доску</button>
-    </section>
-  {% endif %}
-</main>
+        {% endfor %}
+      </section>
+    {% else %}
+      <div class="ts-empty">Пока нет досок. Создайте первую доску.</div>
+    {% endif %}
+  </section>
+</div>
 {% endblock %}

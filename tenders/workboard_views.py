@@ -60,7 +60,17 @@ def workboard_list(request):
             )
         )
 
+    # Trading counters are restricted to users who can access the trading views.
+    nav_counts = None
+    if request.user.is_superuser:
+        from tender_selection.models import FilterSettings
+        from tender_selection.views import _incoming_count, _board_count
+
+        settings = FilterSettings.load()
+        nav_counts = {"incoming": _incoming_count(settings), "board": _board_count(settings)}
+
     return render(request, "tenders/workboards.html", {
+        "nav_counts": nav_counts,
         "boards": boards,
         "selected_board": selected,
         "columns": columns,
