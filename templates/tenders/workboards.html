@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Доски — PSADMIN{% endblock %}
+
+{% block extra_css %}
+  <link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}">
+  <link rel="stylesheet" href="{% static 'tenders/workboards.css' %}">
+{% endblock %}
+
+{% block content %}
+<main class="workboards-page">
+  {% include "tender_selection/_nav.html" with active="workboards" %}
+
+  <header class="workboards-head">
+    <div>
+      <h1>Доски</h1>
+      <p>Задачи и исполнение выигранных тендеров в одном рабочем пространстве.</p>
+    </div>
+    <form method="post" action="{% url 'workboard_create' %}" class="workboards-inline-form">
+      {% csrf_token %}
+      <input name="name" maxlength="200" placeholder="Название новой доски" required>
+      <button type="submit">Создать доску</button>
+    </form>
+  </header>
+
+  {% if messages %}
+    <div class="workboards-messages">
+      {% for message in messages %}<p>{{ message }}</p>{% endfor %}
+    </div>
+  {% endif %}
+
+  {% if boards %}
+    <nav class="workboards-switcher" aria-label="Выбор доски">
+      {% for board in boards %}
+        <a href="{% url 'workboard_list' %}?board={{ board.pk }}"{% if board.pk == selected_board.pk %} class="is-active" aria-current="page"{% endif %}>{{ board.name }}</a>
+      {% endfor %}
+    </nav>
+
+    <section class="workboards-tools">
+      <form method="post" action="{% url 'workboard_task_create' selected_board.pk %}">
+        {% csrf_token %}
+        <h2>Новая задача</h2>
+        <input name="name" maxlength="300" placeholder="Что нужно сделать" required>
+        <textarea name="description" rows="2" placeholder="Короткое пояснение — необязательно"></textarea>
+        <button type="submit">Добавить в очередь</button>
+      </form>
+
+      <form method="post" action="{% url 'workboard_column_create' selected_board.pk %}">
+        {% csrf_token %}
+        <h2>Новая колонка</h2>
+        <input name="name" maxlength="120" placeholder="Например, В работе" required>
+        <button type="submit">Добавить колонку</button>
+      </form>
+
+      {% if request.user.is_superuser and available_tenders %}
+        <form method="post" action="{% url 'workboard_tender_add' selected_board.pk %}">
+          {% csrf_token %}
+          <h2>Выигранный тендер</h2>
+          <select name="tender_id" required>
+            <option value="">Выберите тендер</option>
+            {% for tender in available_tenders %}
+              <option value="{{ tender.pk }}">{{ tender.purchase_number }} — {{ tender.title|default:tender.object_info|truncatechars:70 }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit">Добавить на доску</button>
+        </form>
+      {% endif %}
+    </section>
+
+    <section class="workboards-board" aria-label="{{ selected_board.name }}">
+      {% for column in columns %}
+        <section class="workboards-column">
+          <header><h2>{{ column.name }}</h2><span>{{ column.visible_cards|length }}</span></header>
+          <div class="workboards-cards">
+            {% for card in column.visible_cards %}
+              <article class="workboards-card">
+                {% if card.task %}
+                  <small>Задача</small>
+                  <h3>{{ card.task.name }}</h3>
+                  {% if card.task.description %}<p>{{ card.task.description|linebreaksbr }}</p>{% endif %}
+                {% else %}
+                  <small>Тендер</small>
+                  <h3><a href="{% url 'tender_selection:detail' card.tender.pk %}">{{ card.tender.title|default:card.tender.object_info|default:card.tender.purchase_number }}</a></h3>
+                  <p>Закупка № {{ card.tender.purchase_number }}</p>
+                {% endif %}
+                <form method="post" action="{% url 'workboard_card_move' card.pk %}" class="workboards-move-form">
+                  {% csrf_token %}
+                  <label for="column-{{ card.pk }}">Переместить</label>
+                  <select id="column-{{ card.pk }}" name="column_id">
+                    {% for target in columns %}
+                      <option value="{{ target.pk }}"{% if target.pk == column.pk %} selected{% endif %}>{{ target.name }}</option>
+                    {% endfor %}
+                  </select>
+                  <button type="submit">Перенести</button>
+                </form>
+              </article>
+            {% empty %}
+              <p class="workboards-empty-column">Пока пусто</p>
+            {% endfor %}
+          </div>
+        </section>
+      {% endfor %}
+    </section>
+  {% else %}
+    <section class="workboards-empty">
+      <h2>Создайте первую доску</h2>
+      <p>В ней сразу появятся колонки «В очереди» и «Готово».</p>
+    </section>
+  {% endif %}
+</main>
+{% endblock %}
