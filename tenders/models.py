@@ -1206,7 +1206,11 @@ class CalculationComponent(models.Model):
     source_item = models.ForeignKey(TenderSourceItem, null=True, blank=True, on_delete=models.SET_NULL, related_name="calculation_components")
     parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="children")
     name = models.TextField()
-    quantity_per_parent = models.DecimalField(max_digits=14, decimal_places=4, default=1)
+    description = models.TextField("Описание", blank=True)
+    quantity_per_parent = models.DecimalField(
+        "Количество на единицу родителя", max_digits=14, decimal_places=4,
+        default=1, null=True, blank=True,
+    )
     unit = models.CharField(max_length=64, blank=True)
     requirements = models.JSONField(default=dict, blank=True)
     provenance = models.JSONField(default=dict, blank=True)
@@ -1218,8 +1222,72 @@ class CalculationComponent(models.Model):
     class Meta:
         ordering = ["sort_order", "pk"]
 
+    def _validate_working_item_links(self, using):
+        if not self.commercial_item_id:
+            return
+        item = TenderCommercialItem.objects.using(using).filter(pk=self.commercial_item_id).values(
+            "tender_id", "order_id", "task_id",
+        ).first()
+        if item is None:
+            return
+        if self.quantity_per_parent is None and item["task_id"] is None:
+            raise ValidationError({"quantity_per_parent": "Количество можно не указывать только для задачи."})
+
+        if self.parent_id:
+            ancestor_id = self.parent_id
+            seen = set()
+            while ancestor_id:
+                if ancestor_id == self.pk or ancestor_id in seen:
+                    raise ValidationError({"parent": "Компонент не может входить сам в себя."})
+                seen.add(ancestor_id)
+                ancestor = CalculationComponent.objects.using(using).filter(pk=ancestor_id).values(
+                    "commercial_item_id", "parent_id",
+                ).first()
+                if ancestor is None or ancestor["commercial_item_id"] != self.commercial_item_id:
+                    raise ValidationError({"parent": "Родитель должен относиться к той же рабочей позиции."})
+                ancestor_id = ancestor["parent_id"]
+
+        if self.source_item_id:
+            if item["tender_id"] is None:
+                raise ValidationError({"source_item": "Исходная позиция доступна только для товара тендера."})
+            allowed = set(
+                TenderCommercialItem.objects.using(using)
+                .filter(pk=self.commercial_item_id, source_items__isnull=False)
+                .values_list("source_items__pk", flat=True)
+            )
+            source_id = self.source_item_id
+            seen = set()
+            while source_id and source_id not in allowed:
+                if source_id in seen:
+                    source_id = None
+                    break
+                seen.add(source_id)
+                source = TenderSourceItem.objects.using(using).filter(pk=source_id).values(
+                    "tender_id", "parent_id",
+                ).first()
+                if source is None or source["tender_id"] != item["tender_id"]:
+                    source_id = None
+                    break
+                source_id = source["parent_id"]
+            if source_id not in allowed:
+                raise ValidationError({"source_item": "Источник должен относиться к той же рабочей позиции."})
+
+    def clean(self):
+        super().clean()
+        self._validate_working_item_links(self._state.db or "default")
+
+    def save(self, *args, **kwargs):
+        from django.db import router
+
+        self._validate_working_item_links(kwargs.get("using") or router.db_for_write(type(self), instance=self))
+        return super().save(*args, **kwargs)
+
     @property
     def effective_quantity(self):
+        if self.commercial_item.task_id and (
+            self.commercial_item.quantity is None or self.quantity_per_parent is None
+        ):
+            return None
         return (self.commercial_item.quantity or 0) * self.quantity_per_parent
 
 
