@@ -25,6 +25,10 @@
     <details class="wb-item{% if row.done %} is-complete{% endif %}" data-wb-detail="item-{{ row.item.pk }}" {% if forloop.first %}open{% endif %}>
       <summary><span class="wb-item-dot" aria-label="{% if row.done %}Выполнено{% else %}Не выполнено{% endif %}">{% if row.done %}✓{% endif %}</span><span class="wb-summary-name">{{ row.item.display_name }}</span><small>{% if row.total %}{{ row.done_count }}/{{ row.total }}{% else %}Без маршрута{% endif %}</small></summary>
       <div class="wb-item-body">
+        <div class="wb-edit-actions" aria-label="Действия с подзадачей">
+          <form method="post" action="{% url 'workboard_task_edit' card.pk %}">{% csrf_token %}<input type="hidden" name="action" value="move_item"><input type="hidden" name="item_id" value="{{ row.item.pk }}"><button class="wb-icon" name="direction" value="up" title="Поднять подзадачу"{% if forloop.first %} disabled{% endif %}>↑</button><button class="wb-icon" name="direction" value="down" title="Опустить подзадачу"{% if forloop.last %} disabled{% endif %}>↓</button></form>
+          <form method="post" action="{% url 'workboard_task_edit' card.pk %}" onsubmit="return confirm('Удалить подзадачу вместе с её маршрутом и отметками?')">{% csrf_token %}<input type="hidden" name="action" value="delete_item"><input type="hidden" name="item_id" value="{{ row.item.pk }}"><button class="wb-icon" title="Удалить подзадачу" aria-label="Удалить подзадачу">×</button></form>
+        </div>
         <div class="wb-item-description"><p>{{ row.item.description|linebreaksbr }}</p><button type="button" class="wb-icon" onclick="document.getElementById('edit-item-{{ row.item.pk }}').showModal()" title="Редактировать подзадачу" aria-label="Редактировать подзадачу"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5 5 5M4 20l4-1 12-12-4-4L4 15z"/></svg></button></div>
         <h3 class="wb-route-label">Маршрут</h3>
         <div class="wb-route">
@@ -32,11 +36,21 @@
           {% if not forloop.first %}<div class="wb-route-arrow" aria-hidden="true">↓</div>{% endif %}<details class="wb-stage" data-wb-detail="step-{{ stage.step.pk }}" {% if not stage.done and not stage.blocked %}open{% endif %}>
             <summary><span class="wb-step-num">{% if stage.done %}✓{% else %}{{ forloop.counter }}{% endif %}</span><span class="wb-summary-name">{{ stage.step.display_name }}</span><small>{{ stage.done_count }}/{{ stage.total }}</small></summary>
             <div class="wb-stage-body">
+            <div class="wb-edit-actions" aria-label="Действия с этапом">
+              <form method="post" action="{% url 'workboard_task_edit' card.pk %}">{% csrf_token %}<input type="hidden" name="action" value="move_step"><input type="hidden" name="step_id" value="{{ stage.step.pk }}"><button class="wb-icon" name="direction" value="up" title="Поднять этап"{% if forloop.first %} disabled{% endif %}>↑</button><button class="wb-icon" name="direction" value="down" title="Опустить этап"{% if forloop.last %} disabled{% endif %}>↓</button></form>
+              <form method="post" action="{% url 'workboard_task_edit' card.pk %}" onsubmit="return confirm('Удалить этап вместе с критериями и отметками?')">{% csrf_token %}<input type="hidden" name="action" value="delete_step"><input type="hidden" name="step_id" value="{{ stage.step.pk }}"><button class="wb-icon" title="Удалить этап" aria-label="Удалить этап">×</button></form>
+            </div>
             {% if stage.blocked %}<p class="wb-hint">Сначала завершите предыдущий этап.</p>{% endif %}
             {% for criterion in stage.checks %}
-              <form class="wb-check" method="post" action="{% url 'workboard_task_edit' card.pk %}">{% csrf_token %}<input type="hidden" name="action" value="toggle_check"><input type="hidden" name="checkpoint_id" value="{{ criterion.pk }}"><input type="hidden" name="completed" value="{% if criterion.completed_at %}0{% else %}1{% endif %}">
-                <button type="submit" class="wb-check-button" aria-label="{{ criterion.name }}" role="checkbox" aria-checked="{% if criterion.completed_at %}true{% else %}false{% endif %}" {% if stage.blocked and not criterion.completed_at %}disabled{% endif %}>{% if criterion.completed_at %}✓{% endif %}</button><span {% if criterion.completed_at %}class="wb-checked"{% endif %}>{{ criterion.name }} {% if not criterion.required %}<small>· необязательно</small>{% endif %}</span>
-              </form>
+              <div class="wb-check-row">
+                <form class="wb-check" method="post" action="{% url 'workboard_task_edit' card.pk %}">{% csrf_token %}<input type="hidden" name="action" value="toggle_check"><input type="hidden" name="checkpoint_id" value="{{ criterion.pk }}"><input type="hidden" name="completed" value="{% if criterion.completed_at %}0{% else %}1{% endif %}">
+                  <button type="submit" class="wb-check-button" aria-label="{{ criterion.name }}" role="checkbox" aria-checked="{% if criterion.completed_at %}true{% else %}false{% endif %}" {% if stage.blocked and not criterion.completed_at %}disabled{% endif %}>{% if criterion.completed_at %}✓{% endif %}</button><span {% if criterion.completed_at %}class="wb-checked"{% endif %}>{{ criterion.name }} {% if not criterion.required %}<small>· необязательно</small>{% endif %}</span>
+                </form>
+                <div class="wb-edit-actions" aria-label="Действия с критерием">
+                  <form method="post" action="{% url 'workboard_task_edit' card.pk %}">{% csrf_token %}<input type="hidden" name="action" value="move_check"><input type="hidden" name="checkpoint_id" value="{{ criterion.pk }}"><button class="wb-icon" name="direction" value="up" title="Поднять критерий"{% if forloop.first %} disabled{% endif %}>↑</button><button class="wb-icon" name="direction" value="down" title="Опустить критерий"{% if forloop.last %} disabled{% endif %}>↓</button></form>
+                  <form method="post" action="{% url 'workboard_task_edit' card.pk %}" onsubmit="return confirm('Удалить критерий и историю его отметок?')">{% csrf_token %}<input type="hidden" name="action" value="delete_check"><input type="hidden" name="checkpoint_id" value="{{ criterion.pk }}"><button class="wb-icon" title="Удалить критерий" aria-label="Удалить критерий">×</button></form>
+                </div>
+              </div>
             {% endfor %}
             <button type="button" class="wb-link" onclick="document.getElementById('new-check-{{ stage.step.pk }}').showModal()">+ Критерий</button>
             </div>

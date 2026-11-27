@@ -1273,6 +1273,7 @@ class TenderCommercialItem(models.Model):
     source_key = models.CharField(max_length=160)
     display_name = models.TextField()
     description = models.TextField("Описание", blank=True)
+    position = models.PositiveIntegerField("Порядок", default=0)
     quantity = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
     unit = models.CharField(max_length=64, blank=True)
     requirements = models.JSONField(default=dict, blank=True)

@@ -81,6 +81,9 @@ body:not(.workspace-embedded) .wb-task-inner{background:var(--surface);border-ra
 .wb-item-description{align-items:flex-start;color:var(--ink-3);font-size:13px;margin:0 0 15px}
 .wb-item-description p{margin:0;overflow-wrap:anywhere}
 .wb-item-description button{margin-left:auto}
+.wb-edit-actions,.wb-edit-actions form{display:flex;align-items:center;gap:2px;margin:0}
+.wb-item-body>.wb-edit-actions{justify-content:flex-end;margin:-3px 0 7px}
+.wb-edit-actions .wb-icon:disabled{opacity:.3;cursor:default}
 .wb-route-label{font-size:12px;font-weight:600;color:var(--ink-3);margin:0 0 8px}
 .wb-stage{background:var(--tint-positive);border:1px solid var(--border-positive);border-radius:9px}
 .wb-stage>summary{padding:10px 13px;font-size:13px;font-weight:600;color:var(--positive-ink)}
@@ -90,7 +93,10 @@ body:not(.workspace-embedded) .wb-task-inner{background:var(--surface);border-ra
 .wb-route-arrow{height:19px;display:grid;place-items:center;color:var(--positive-ink)}
 .wb-task-page svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
 .wb-check{display:flex;align-items:flex-start;gap:9px;font-size:13px;padding:7px 0;margin:0}
-.wb-stage-body>.wb-check:first-of-type{border-top:1px solid var(--border-positive);padding-top:10px}
+.wb-check-row{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;border-top:1px solid var(--border-positive)}
+.wb-check-row .wb-check{flex:1;min-width:0}
+.wb-check-row>.wb-edit-actions{padding-top:4px}
+.wb-stage-body>.wb-edit-actions{justify-content:flex-end;margin-bottom:4px}
 .wb-task-page .wb-check-button{box-sizing:border-box;width:16px;height:16px;min-height:0;flex:none;margin:2px 0 0;padding:0;border:1px solid var(--border-positive);border-radius:4px;background:var(--surface);color:var(--ink);font-size:12px;line-height:1;display:grid;place-items:center}
 .wb-task-page .wb-check-button[aria-checked=true]{background:var(--accent-fill);border-color:var(--accent-fill);color:white}
 .wb-checked{text-decoration:line-through;color:var(--ink-3)}

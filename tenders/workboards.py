@@ -98,7 +98,7 @@ def move_card(card, column):
 
 def task_progress(task):
     items = []
-    for item in task.commercial_items.all():
+    for item in task.commercial_items.order_by("position", "pk"):
         if item.status != "active":
             continue
         plans = list(item.route_plans.all())
@@ -140,6 +140,48 @@ def _task_step(card, step_id):
     return get_object_or_404(ComponentOperationStep, pk=step_id, route_plan__commercial_item__task_id=card.task_id)
 
 
+def _task_check(card, checkpoint_id):
+    from django.shortcuts import get_object_or_404
+    return get_object_or_404(
+        WorkCheckpoint,
+        pk=checkpoint_id,
+        step__route_plan__commercial_item__task_id=card.task_id,
+    )
+
+
+def _save_order(rows):
+    if not rows:
+        return
+    model = type(rows[0])
+    offset = max(row.position for row in rows) + len(rows) + 1
+    for index, row in enumerate(rows):
+        row.position = offset + index
+    model.objects.bulk_update(rows, ["position"])
+    for index, row in enumerate(rows):
+        row.position = index
+    model.objects.bulk_update(rows, ["position"])
+
+
+def _move_in_order(queryset, target_id, direction):
+    if direction not in ("up", "down"):
+        raise ValidationError("Неизвестное направление перемещения.")
+    rows = list(queryset.select_for_update().order_by("position", "pk"))
+    try:
+        index = next(index for index, row in enumerate(rows) if row.pk == int(target_id))
+    except (StopIteration, TypeError, ValueError) as error:
+        raise ValidationError("Элемент не найден в этой задаче.") from error
+    destination = index - 1 if direction == "up" else index + 1
+    if destination < 0 or destination >= len(rows):
+        return
+    rows[index], rows[destination] = rows[destination], rows[index]
+    _save_order(rows)
+
+
+def _delete_checkpoints(checkpoints):
+    WorkCheckpointEvent.objects.filter(checkpoint__in=checkpoints).delete()
+    checkpoints.delete()
+
+
 def _reopen_if_needed(card):
     if card.column.kind != WorkBoardColumn.Kind.DONE:
         return
@@ -163,8 +205,14 @@ def edit_task_work(card, actor, action, data):
         card.task.description = str(data.get("description") or "").strip()
         card.task.save(update_fields=["name", "description"])
     elif action == "add_item":
-        TenderCommercialItem.objects.create(task=card.task, source_key="task:" + uuid.uuid4().hex,
-                                            display_name=name, description=str(data.get("description") or "").strip())
+        last = card.task.commercial_items.filter(status="active").aggregate(value=Max("position"))["value"]
+        TenderCommercialItem.objects.create(
+            task=card.task,
+            source_key="task:" + uuid.uuid4().hex,
+            display_name=name,
+            description=str(data.get("description") or "").strip(),
+            position=0 if last is None else last + 1,
+        )
     elif action == "edit_item":
         item = _task_item(card, data.get("item_id"))
         item.display_name = name
@@ -183,10 +231,37 @@ def edit_task_work(card, actor, action, data):
         last = step.checkpoints.aggregate(value=Max("position"))["value"]
         WorkCheckpoint.objects.create(step=step, name=name, position=0 if last is None else last + 1,
                                       required=data.get("required") in (True, "1", "on"))
+    elif action == "move_item":
+        _move_in_order(
+            card.task.commercial_items.filter(status="active"),
+            data.get("item_id"),
+            data.get("direction"),
+        )
+    elif action == "move_step":
+        step = _task_step(card, data.get("step_id"))
+        _move_in_order(step.route_plan.steps.all(), step.pk, data.get("direction"))
+    elif action == "move_check":
+        checkpoint = _task_check(card, data.get("checkpoint_id"))
+        _move_in_order(checkpoint.step.checkpoints.all(), checkpoint.pk, data.get("direction"))
+    elif action == "delete_item":
+        item = _task_item(card, data.get("item_id"))
+        siblings = card.task.commercial_items.filter(status="active").exclude(pk=item.pk)
+        _delete_checkpoints(WorkCheckpoint.objects.filter(step__route_plan__commercial_item=item))
+        item.delete()
+        _save_order(list(siblings.select_for_update().order_by("position", "pk")))
+    elif action == "delete_step":
+        step = _task_step(card, data.get("step_id"))
+        siblings = step.route_plan.steps.exclude(pk=step.pk)
+        _delete_checkpoints(step.checkpoints.all())
+        step.delete()
+        _save_order(list(siblings.select_for_update().order_by("position", "pk")))
+    elif action == "delete_check":
+        checkpoint = _task_check(card, data.get("checkpoint_id"))
+        siblings = checkpoint.step.checkpoints.exclude(pk=checkpoint.pk)
+        _delete_checkpoints(WorkCheckpoint.objects.filter(pk=checkpoint.pk))
+        _save_order(list(siblings.select_for_update().order_by("position", "pk")))
     elif action == "toggle_check":
-        from django.shortcuts import get_object_or_404
-        checkpoint = get_object_or_404(WorkCheckpoint.objects.select_related("step"),
-                                        pk=data.get("checkpoint_id"), step__route_plan__commercial_item__task_id=card.task_id)
+        checkpoint = _task_check(card, data.get("checkpoint_id"))
         completed = data.get("completed") in (True, "1", "on")
         if completed == bool(checkpoint.completed_at):
             return card

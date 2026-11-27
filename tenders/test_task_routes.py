@@ -3,7 +3,14 @@ from django.core.exceptions import ValidationError
 from django.test import TestCase
 from django.urls import reverse
 
-from .models import WorkBoardCard, WorkCheckpoint, WorkCheckpointEvent, WorkBoardColumn
+from .models import (
+    ComponentOperationStep,
+    TenderCommercialItem,
+    WorkBoardCard,
+    WorkBoardColumn,
+    WorkCheckpoint,
+    WorkCheckpointEvent,
+)
 from .workboards import create_board, create_task_from_plan, edit_task_work, move_card, task_progress
 
 
@@ -141,3 +148,57 @@ class TaskRouteTests(TestCase):
         self.assertContains(response, 'wb-route-arrow')
         self.assertContains(response, 'role="checkbox"', count=3)
         self.assertContains(response, 'name="checkpoint_id"')
+        self.assertContains(response, 'value="move_item"')
+        self.assertContains(response, 'value="delete_step"')
+        self.assertContains(response, 'value="move_check"')
+
+    def test_subtasks_steps_and_checks_can_be_reordered(self):
+        edit_task_work(self.card, self.owner, "add_item", {"name": "Вторая подзадача"})
+        first_item, second_item = list(self.card.task.commercial_items.order_by("position", "pk"))
+        edit_task_work(self.card, self.owner, "move_item", {
+            "item_id": second_item.pk, "direction": "up",
+        })
+        self.assertEqual(
+            list(self.card.task.commercial_items.order_by("position", "pk").values_list("pk", flat=True)),
+            [second_item.pk, first_item.pk],
+        )
+
+        steps = list(first_item.route_plans.get().steps.order_by("position", "pk"))
+        edit_task_work(self.card, self.owner, "move_step", {
+            "step_id": steps[1].pk, "direction": "up",
+        })
+        self.assertEqual(
+            list(first_item.route_plans.get().steps.order_by("position", "pk").values_list("pk", flat=True)),
+            [steps[1].pk, steps[0].pk],
+        )
+
+        checks = list(steps[0].checkpoints.order_by("position", "pk"))
+        edit_task_work(self.card, self.owner, "move_check", {
+            "checkpoint_id": checks[1].pk, "direction": "up",
+        })
+        self.assertEqual(
+            list(steps[0].checkpoints.order_by("position", "pk").values_list("pk", flat=True)),
+            [checks[1].pk, checks[0].pk],
+        )
+
+    def test_subtask_step_and_check_deletion_stays_inside_task(self):
+        other = create_task_from_plan(self.board, self.owner, {
+            "name": "Соседняя задача",
+            "items": [{"name": "Не трогать", "steps": [{"name": "Этап", "checks": ["Критерий"]}]}],
+        })
+        other_item = other.task.commercial_items.get()
+        first_item = self.card.task.commercial_items.get()
+        first_step, second_step = list(first_item.route_plans.get().steps.order_by("position", "pk"))
+        first_check = first_step.checkpoints.first()
+        self.toggle(first_check, True)
+
+        edit_task_work(self.card, self.owner, "delete_check", {"checkpoint_id": first_check.pk})
+        self.assertFalse(WorkCheckpoint.objects.filter(pk=first_check.pk).exists())
+        self.assertFalse(WorkCheckpointEvent.objects.filter(checkpoint_id=first_check.pk).exists())
+
+        edit_task_work(self.card, self.owner, "delete_step", {"step_id": second_step.pk})
+        self.assertFalse(ComponentOperationStep.objects.filter(pk=second_step.pk).exists())
+
+        edit_task_work(self.card, self.owner, "delete_item", {"item_id": first_item.pk})
+        self.assertFalse(TenderCommercialItem.objects.filter(pk=first_item.pk).exists())
+        self.assertTrue(TenderCommercialItem.objects.filter(pk=other_item.pk).exists())
