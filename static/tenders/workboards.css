@@ -1,7 +1,10 @@
 /* Board-specific layout only. Shared navigation, buttons, fields and kanban live in core/index.css and tender_selection/tenders.css. */
-.workboards-switcher { margin:0 0 18px; }
-.workboards-switcher .ts-seg { flex-wrap:wrap; max-width:100%; }
-.workboards-switcher .ts-seg > a { overflow-wrap:anywhere; }
+.wb-board-navigation { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:0 0 12px; flex-wrap:wrap; }
+.workboards-switcher { display:flex; gap:18px; align-items:center; flex-wrap:wrap; min-width:0; }
+.workboards-switcher a { color:var(--ink-2); font-size:13px; font-weight:500; text-decoration:none; padding:8px 2px; border-bottom:2px solid transparent; overflow-wrap:anywhere; }
+.workboards-switcher a.is-active { color:var(--ink); font-weight:600; border-bottom-color:var(--accent); }
+.wb-add-board { margin-left:auto; }
+
 .wb-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin:0 0 18px; }
 .wb-toolbar > strong { min-width:0; overflow-wrap:anywhere; }
 .wb-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
@@ -10,7 +13,16 @@
 .wb-dialog form { display:grid; gap:12px; margin:0; }
 .wb-dialog h2 { margin:0; font-size:18px; }
 .wb-dialog .form-control { box-sizing:border-box; width:100%; min-width:0; }
-.wb-dialog .wb-actions { justify-content:flex-end; }
+.wb-dialog .wb-dialog-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:2px; }
+.wb-dialog .wb-dialog-actions > button { width:100%; min-height:40px; padding:8px 10px; font-size:13px; margin:0; }
+.wb-dialog .wb-import { margin-top:18px; padding-top:12px; border-top:1px solid var(--separator); }
+.wb-dialog .wb-file-field { display:grid; gap:6px; font-size:12px; color:var(--ink-2); }
+.wb-dialog input[type=file] { font-size:12px; padding:6px; }
+.wb-dialog input[type=file]::file-selector-button { border:1px solid var(--field-border); border-radius:var(--radius-sm); background:var(--surface-2); color:var(--ink); padding:6px 9px; margin-right:8px; font:inherit; cursor:pointer; }
+.wb-dialog .wb-import-actions { display:flex; justify-content:flex-end; }
+.wb-dialog .wb-import-actions button { min-height:36px; padding:6px 12px; font-size:13px; }
+@media(max-width:480px){.wb-dialog .wb-dialog-actions{grid-template-columns:1fr;}}
+
 .workboards-messages { padding:0 0 12px; color:var(--ink-2); }
 .workboards-move-form { display:flex; align-items:center; gap:8px; margin:6px 0 0; padding-top:10px; border-top:1px solid var(--separator); }
 .workboards-move-form select { flex:1; min-width:0; width:100%; }

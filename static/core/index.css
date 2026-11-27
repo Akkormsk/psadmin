@@ -35,26 +35,26 @@
   --tint-cool:     light-dark(#eceff3, #2c2d31);
   --tint-info:     light-dark(#eef4fb, #1e2733);
   --tint-warm:     light-dark(#faf6ef, #2b2822);
-  --tint-positive: light-dark(#e8f5ed, rgba(48, 209, 88, 0.13));
+  --tint-positive: light-dark(#e7f1eb, rgba(128, 180, 154, 0.13));
   --tint-warning:  light-dark(#fff4dc, rgba(232, 168, 62, 0.15));
   --tint-negative: light-dark(#fdeaea, rgba(255, 105, 97, 0.14));
   --border:          light-dark(#e5e7eb, #38383c);
-  --border-positive: light-dark(#bfdcca, rgba(48, 209, 88, 0.32));
+  --border-positive: light-dark(#c1d8c9, rgba(128, 180, 154, 0.32));
   --border-warning:  light-dark(#ead5a4, rgba(232, 168, 62, 0.40));
   --border-negative: light-dark(#f0a7a7, rgba(255, 105, 97, 0.42));
 
-  --positive-ink:        light-dark(#176b3a, #49d06b);
-  --positive-ink-strong: light-dark(#0f6734, #5cdd7d);
+  --positive-ink:        light-dark(#286044, #94c5a9);
+  --positive-ink-strong: light-dark(#24543d, #a8d3ba);
   --warning-ink:         light-dark(#8a5a00, #e0a33a);
   --negative-ink:        light-dark(#b91c1c, #ff6b60);
   --info-ink:            light-dark(#2f5da8, #8fb4ff);
 
-  /* ---- accent (iOS system green) ---- */
-  --accent:        light-dark(#34c759, #30d158);
-  --accent-fill:   light-dark(#34c759, #279c46); /* solid-button green: keeps white text legible on dark */
-  --accent-strong: light-dark(#248a3d, #34c759);
-  --accent-tint:   light-dark(#eafaef, rgba(48, 209, 88, 0.16));
-  --accent-ring:   light-dark(rgba(52, 199, 89, 0.32), rgba(48, 209, 88, 0.40));
+  /* ---- accent (muted forest green) ---- */
+  --accent:        light-dark(#2f6e4f, #80b49a);
+  --accent-fill:   light-dark(#2f6e4f, #326e51); /* solid-button green: keeps white text legible on dark */
+  --accent-strong: light-dark(#285e44, #2f6e4f);
+  --accent-tint:   light-dark(#e7f1eb, rgba(128, 180, 154, 0.16));
+  --accent-ring:   light-dark(rgba(47, 110, 79, 0.32), rgba(128, 180, 154, 0.40));
 
   /* ---- elevation (single set; dark leans on borders, not shadow) ---- */
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.05), 0 18px 40px -14px rgba(0, 0, 0, 0.18);
@@ -2495,3 +2495,22 @@ body.workspace-embedded .provider-detail-page__card { display:grid; min-height:c
 .copy-notice:hover { text-decoration-style:solid; }
 .copy-notice--plain { text-decoration-line:none; }
 .copy-notice:focus-visible { outline:2px solid currentColor; outline-offset:2px; }
+
+/* Shared disclosure defaults; specialised summaries retain their existing layouts. */
+:where(details:not([class]),details.disclosure) > summary {
+  display:flex; align-items:center; gap:8px; cursor:pointer; list-style:none;
+  font-size:12px; font-weight:500; line-height:1.5; color:var(--ink-2);
+  padding:5px 0; width:fit-content; max-width:100%;
+}
+:where(details:not([class]),details.disclosure) > summary::-webkit-details-marker { display:none; }
+:where(details:not([class]),details.disclosure) > summary::marker { content:""; }
+:where(details:not([class]),details.disclosure) > summary::before {
+  content:""; display:inline-block; flex:0 0 6px; width:6px; height:6px;
+  box-sizing:border-box; border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor;
+  transform:rotate(-45deg); margin:0 3px; transition:transform .15s ease;
+}
+:where(details:not([class]),details.disclosure)[open] > summary::before { transform:rotate(45deg); }
+:where(details:not([class]),details.disclosure)[open] > summary { margin-bottom:10px; }
+:where(details:not([class]),details.disclosure) > summary:hover { color:var(--ink); }
+:where(details:not([class]),details.disclosure) > summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; border-radius:4px; }
+@media(prefers-reduced-motion:reduce) { :where(details:not([class]),details.disclosure) > summary::before { transition:none; } }

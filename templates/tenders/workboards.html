@@ -4,7 +4,7 @@
 {% block title %}Тендеры{% endblock %}
 {% block extra_head %}
 <link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}?v=20261127-shared-kanban">
-<link rel="stylesheet" href="{% static 'tenders/workboards.css' %}?v=20261127-4">
+<link rel="stylesheet" href="{% static 'tenders/workboards.css' %}?v=20261127-5">
 {% endblock %}
 
 {% block content %}
@@ -12,35 +12,32 @@
   <a href="/" class="back-link">← На главную</a>
   <h1>Тендеры</h1>
   {% include "tender_selection/_nav.html" with active="workboards" %}
-  <section class="panel ts-sheet workboards-page">
-    <div class="ts-head">
-      <h2 class="ts-head__title">Доски</h2>
-      <div class="ts-row__actions">
-        <button type="button" class="button-secondary" onclick="document.getElementById('wb-new-board').showModal()">+ Новая доска</button>
-      </div>
-    </div>
+  <div class="wb-board-navigation">
+    {% if boards %}
+    <nav class="workboards-switcher" aria-label="Выбор доски">
+      {% for board in boards %}<a href="{% url 'workboard_list' %}?board={{ board.pk }}"{% if board.pk == selected_board.pk %} class="is-active" aria-current="page"{% endif %}>{{ board.name }}</a>{% endfor %}
+    </nav>
+    {% endif %}
+    <button type="button" class="ts-quiet wb-add-board" onclick="document.getElementById('wb-new-board').showModal()">+ Доска</button>
+  </div>
     <dialog id="wb-new-board" class="wb-dialog">
       <form method="post" action="{% url 'workboard_create' %}">
         {% csrf_token %}
         <h2>Новая доска</h2>
         <input class="form-control" name="name" maxlength="200" placeholder="Название новой доски" required>
-        <div class="wb-actions"><button type="submit" class="button-success">Создать</button><button type="button" class="button-secondary" onclick="this.closest('dialog').close()">Отмена</button></div>
+        <div class="wb-actions wb-dialog-actions"><button type="submit" class="button-success">Создать</button><button type="button" class="button-secondary" onclick="this.closest('dialog').close()">Отмена</button></div>
       </form>
     </dialog>
     {% if messages %}
       <div class="workboards-messages" role="status">{% for message in messages %}<p>{{ message }}</p>{% endfor %}</div>
     {% endif %}
+  <section class="panel ts-sheet workboards-page">
     {% if boards %}
-      <nav class="workboards-switcher" aria-label="Выбор доски">
-        <div class="ts-seg ts-seg--sm">
-          {% for board in boards %}<a href="{% url 'workboard_list' %}?board={{ board.pk }}"{% if board.pk == selected_board.pk %} class="is-active" aria-current="page"{% endif %}>{{ board.name }}</a>{% endfor %}
-        </div>
-      </nav>
-      <div class="wb-toolbar">
-        <strong>{{ selected_board.name }}</strong>
+      <div class="ts-head">
+        <h2 class="ts-head__title">{{ selected_board.name }}</h2>
         <div class="wb-actions">
-          <button type="button" class="button-secondary" onclick="document.getElementById('wb-new-column').showModal()">+ Колонка</button>
-          <button type="button" class="button-secondary" onclick="document.getElementById('wb-new-task').showModal()">+ Задача</button>
+          <button type="button" class="ts-quiet" onclick="document.getElementById('wb-new-column').showModal()">+ Колонка</button>
+          <button type="button" class="ts-quiet" onclick="document.getElementById('wb-new-task').showModal()">+ Задача</button>
         </div>
       </div>
       <dialog id="wb-new-task" class="wb-dialog">
@@ -49,12 +46,12 @@
           <h2>Новая задача</h2>
           <input class="form-control" name="name" maxlength="300" placeholder="Что нужно сделать" required>
           <textarea class="form-control" name="description" rows="2" placeholder="Короткое пояснение — необязательно"></textarea>
-          <div class="wb-actions"><button type="submit" class="button-success">Добавить в очередь</button><button type="button" class="button-secondary" onclick="this.closest('dialog').close()">Отмена</button></div>
+          <div class="wb-actions wb-dialog-actions"><button type="submit" class="button-success">Добавить в очередь</button><button type="button" class="button-secondary" onclick="this.closest('dialog').close()">Отмена</button></div>
         </form>
-        <details style="margin-top:14px"><summary>Импорт готовой задачи (JSON)</summary>
+        <details class="disclosure wb-import"><summary>Импорт готовой задачи (JSON)</summary>
           <form method="post" enctype="multipart/form-data" action="{% url 'workboard_task_import' selected_board.pk %}">{% csrf_token %}
-            <label>Файл плана <input type="file" name="plan_file" accept=".json,application/json" required></label>
-            <button type="submit" class="button-secondary">Импортировать</button>
+            <label class="wb-file-field"><span>Файл плана</span><input class="form-control" type="file" name="plan_file" accept=".json,application/json" required></label>
+            <div class="wb-import-actions"><button type="submit" class="button-secondary">Импортировать</button></div>
           </form>
         </details>
       </dialog>
@@ -63,7 +60,7 @@
           {% csrf_token %}
           <h2>Новая колонка</h2>
           <input class="form-control" name="name" maxlength="120" placeholder="Например, В работе" required>
-          <div class="wb-actions"><button type="submit" class="button-success">Добавить колонку</button><button type="button" class="button-secondary" onclick="this.closest('dialog').close()">Отмена</button></div>
+          <div class="wb-actions wb-dialog-actions"><button type="submit" class="button-success">Добавить колонку</button><button type="button" class="button-secondary" onclick="this.closest('dialog').close()">Отмена</button></div>
         </form>
       </dialog>
       <section class="kb-board" aria-label="{{ selected_board.name }}">
