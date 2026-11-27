@@ -125,6 +125,14 @@ class ProductEditingTests(TestCase):
         response = self.client.get(reverse('tender_selection:detail', args=[tender.pk]), {'analysis_snapshot': '1', 'full_card': '1'}, secure=True)
         self.assertContains(response, 'data-product-edit-key="notice-0"')
 
+    def test_document_source_rows_use_the_matching_commercial_editor_key(self):
+        from django.urls import reverse
+        self.source.source_type = 'document_extraction'
+        self.source.save(update_fields=['source_type'])
+        self.client.force_login(self.user)
+        response = self.client.get(reverse('tender_selection:detail', args=[self.tender.pk]), {'analysis_snapshot': '1', 'full_card': '1'}, secure=True)
+        self.assertContains(response, f'data-product-edit-key="good-{self.good.pk}"')
+
     def test_source_quantity_and_exclusion_need_explicit_confirmation(self):
         state = product_editor(self.tender)
         self.assertTrue(state['items'][0]['source_locked'])
