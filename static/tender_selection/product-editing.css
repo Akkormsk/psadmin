@@ -1,6 +1,7 @@
 .ts-product-edit-toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:12px 0}
-.ts-product-edit-toolbar button{margin-right:8px}
+.ts-product-edit-toolbar button{margin:0}
 .ts-product-edit-icons{display:flex;gap:6px;margin-left:auto}.ts-product-icon{display:inline-grid;place-items:center;width:32px;height:32px;padding:0;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--ink);font-size:17px;line-height:1;cursor:pointer}.ts-product-icon:hover,.ts-product-icon:focus-visible{border-color:var(--accent);color:var(--accent);outline:none}
+.ts-product-edit-actions{display:flex;align-items:center;gap:8px;margin-left:auto}.ts-product-edit-actions[hidden]{display:none}.ts-product-edit-actions button{min-height:34px;padding:6px 12px;border-radius:8px;font-size:14px;box-shadow:none}
 .ts-product-edit-row{padding:12px 0;border-bottom:1px solid var(--border)}
 .ts-product-edit-source{display:flex;justify-content:space-between;gap:12px;margin-bottom:8px}.ts-product-edit-source small{color:var(--ink-3)}
 .ts-product-edit-fields{display:grid;grid-template-columns:minmax(160px,2fr) minmax(90px,1fr) minmax(70px,.7fr) minmax(130px,1fr) auto;gap:12px;align-items:end}
