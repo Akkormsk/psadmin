@@ -20,7 +20,7 @@ class ProductEditingTests(TestCase):
     def save(self, state):
         return save_products(self.user, self.tender.pk, state)
 
-    def test_edit_manual_price_preserves_sources_and_history(self):
+    def test_edit_manual_price_preserves_sources_and_updates_one_working_estimate(self):
         original = deepcopy(self.tender.notification_raw)
         state = product_editor(self.tender)
         row = state['items'][0]
@@ -38,8 +38,10 @@ class ProductEditingTests(TestCase):
         state = product_editor(self.tender)
         state['items'][0]['material'] = '70'
         self.save(state)
-        self.assertEqual(estimate.lines.get().material_unit, 50)
-        self.assertEqual(self.tender.estimates.latest('pk').supersedes_id, estimate.pk)
+        self.assertEqual(self.tender.estimates.count(), 1)
+        self.assertEqual(self.tender.estimates.latest('pk').pk, estimate.pk)
+        self.assertEqual(estimate.lines.get().material_unit, 70)
+        self.assertIsNone(estimate.supersedes_id)
 
     def test_read_cancel_and_conflict_do_not_write(self):
         state = product_editor(self.tender)

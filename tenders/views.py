@@ -19,6 +19,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.core import serializers
 from django.db import close_old_connections, transaction
+from django.db.models import OuterRef, Subquery
 from django.http import Http404, HttpResponse, JsonResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -1076,7 +1077,8 @@ def _saved_estimates_for(request):
     order_qs = OrderEstimate.objects.all()
     # Тот же критерий, что и на канбане: тендер виден, пока не архивирован
     # («Расчёт» → «Торги» → «Результат»); архивный — пропадает отовсюду разом.
-    tender_qs = TenderEstimate.objects.filter(tender__isnull=False).exclude(tender__status=Tender.DISMISSED)
+    latest_tender_estimate = TenderEstimate.objects.filter(tender_id=OuterRef("tender_id")).order_by("-updated_at", "-pk").values("pk")[:1]
+    tender_qs = TenderEstimate.objects.filter(tender__isnull=False, pk=Subquery(latest_tender_estimate)).exclude(tender__status=Tender.DISMISSED)
     if not request.user.is_superuser:
         order_qs = order_qs.filter(owner=request.user)
         tender_qs = tender_qs.filter(owner=request.user)

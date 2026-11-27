@@ -394,13 +394,19 @@ def save_products(user, tender_id, state, *, route_updates=None, route_only=Fals
     from .tender_data import mark_tender_inputs_changed
     if changed or excluded:
         mark_tender_inputs_changed(tender, commercial_ids=changed + excluded)
-    settings = TenderSettings.objects.first() or TenderSettings()
-    estimate = TenderEstimate.objects.create(tender=tender, owner=user, supersedes=previous,
-        name=tender.title[:300], tender_number=tender.purchase_number,
-        reduction_percent=previous.reduction_percent if previous else settings.default_reduction_percent,
-        russia_delivery=previous.russia_delivery if previous else 0,
-        vat_rate_snapshot=previous.vat_rate_snapshot if previous else settings.vat_rate,
-        document_analysis=deepcopy(previous.document_analysis) if previous else {})
+    if previous:
+        estimate = previous
+        estimate.name = tender.title[:300]
+        estimate.tender_number = tender.purchase_number
+        estimate.supersedes = None
+        estimate.lines.all().delete()
+        estimate.save(update_fields=['name', 'tender_number', 'supersedes', 'updated_at'])
+    else:
+        settings = TenderSettings.objects.first() or TenderSettings()
+        estimate = TenderEstimate.objects.create(tender=tender, owner=user,
+            name=tender.title[:300], tender_number=tender.purchase_number,
+            reduction_percent=settings.default_reduction_percent,
+            russia_delivery=0, vat_rate_snapshot=settings.vat_rate)
     lines = []
     for good, row, route, old_line in saved:
         nmck = _number(row.get('nmck'), optional=True)

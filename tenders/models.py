@@ -546,9 +546,8 @@ class TenderEstimate(models.Model):
             raise ValidationError({"supersedes": "Предыдущий расчёт должен принадлежать тому же тендеру."})
 
     def display_status(self):
-        """Черновик/Готово — не хранимый статус, а вид по полноте ЭТОГО расчёта
-        (тендер может иметь несколько просчётов); дальше стадия сделки — общая
-        для тендера, берём с него."""
+        """Черновик/Готово — вид по полноте рабочего расчёта; стадия сделки
+        остаётся общей для тендера и берётся с него."""
         from tender_selection.models import Tender
 
         if self.tender_id and self.tender.outcome_status != Tender.OUTCOME_DRAFT:
