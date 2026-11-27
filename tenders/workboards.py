@@ -66,6 +66,10 @@ def create_task_card(board, *, name, description=""):
 
 @transaction.atomic
 def create_tender_card(board, tender):
+    # Serialize attempts even when different destination boards are selected.
+    tender = type(tender).objects.select_for_update().get(pk=tender.pk)
+    if WorkBoardCard.objects.filter(tender=tender).exists():
+        raise ValidationError("Тендер уже передан в исполнение.")
     queue = WorkBoardColumn.objects.select_for_update().get(board=board, kind=WorkBoardColumn.Kind.QUEUE)
     return WorkBoardCard.objects.create(
         board=board, column=queue, tender=tender, position=_next_card_position(queue),

@@ -52,7 +52,9 @@
           {% csrf_token %}<input type="hidden" name="next" value="{{ return_url }}">
           <button type="submit" class="ts-quiet">Скрыть</button>
         </form>
-        {% if tender.outcome_status == "draft" and calc_verdict %}
+        {% if tender.outcome_status == "won" and request.user.is_superuser %}
+          {% include "tenders/_execution_action.html" %}
+        {% elif tender.outcome_status == "draft" and calc_verdict %}
         <form method="post" action="{% url 'tender_pipeline_estimate_status' estimate.pk %}">
           {% csrf_token %}<input type="hidden" name="status" value="pending">
           <button type="submit" class="ts-work">На торги →</button>

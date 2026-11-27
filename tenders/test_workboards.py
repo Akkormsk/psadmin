@@ -126,9 +126,14 @@ class WorkBoardViewTests(TestCase):
         self.client.force_login(admin)
 
         response = self.client.post(
-            reverse("workboard_tender_add", args=[self.board.pk]),
-            {"tender_id": tender.pk},
+            reverse("workboard_tender_add", args=[tender.pk]),
+            {"board_id": self.board.pk},
         )
 
-        self.assertRedirects(response, f"{reverse('workboard_list')}?board={self.board.pk}")
+        self.assertRedirects(response, reverse("tender_selection:detail", args=[tender.pk]), fetch_redirect_response=False)
         self.assertTrue(WorkBoardCard.objects.filter(board=self.board, tender=tender).exists())
+        self.client.post(reverse("workboard_tender_add", args=[tender.pk]), {"board_id": self.board.pk})
+        self.assertEqual(WorkBoardCard.objects.filter(tender=tender).count(), 1)
+        page = self.client.get(reverse("workboard_list"))
+        self.assertContains(page, "workboards.css")
+        self.assertNotContains(page, "Выберите тендер")
