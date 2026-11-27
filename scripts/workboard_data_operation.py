@@ -14,14 +14,36 @@ if action not in {"inspect", "import"}:
 
 
 def card_summary(card):
-    items = card.task.commercial_items.filter(status="active") if card.task_id else []
-    return {
+    summary = {
         "id": card.pk,
         "type": "task" if card.task_id else "tender",
         "name": card.task.name if card.task_id else card.tender.purchase_number,
         "column": card.column.name,
-        "items": items.count() if card.task_id else None,
     }
+    if card.task_id:
+        summary["description"] = card.task.description
+        summary["items"] = []
+        for item in card.task.commercial_items.filter(status="active").order_by("position", "pk"):
+            plans = list(item.route_plans.all())
+            summary["items"].append({
+                "name": item.display_name,
+                "description": item.description,
+                "steps": [
+                    {
+                        "name": step.display_name,
+                        "checks": [
+                            {
+                                "name": check.name,
+                                "required": check.required,
+                                "completed": bool(check.completed_at),
+                            }
+                            for check in step.checkpoints.all()
+                        ],
+                    }
+                    for step in (plans[0].steps.all() if len(plans) == 1 else [])
+                ],
+            })
+    return summary
 
 
 boards = list(WorkBoard.objects.select_related("created_by").order_by("pk"))
