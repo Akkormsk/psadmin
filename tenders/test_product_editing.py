@@ -104,6 +104,7 @@ class ProductEditingTests(TestCase):
         self.client.force_login(self.user)
         state = product_editor(self.tender)
         state['items'][0].update(quantity='200')
+        state['confirmations'] = {'quantity': [state['items'][0]['key']], 'nmck': [], 'exclusions': []}
         response = self.client.post(reverse('tender_selection:save_products', args=[self.tender.pk]), state, content_type='application/json', secure=True)
         self.assertEqual(response.status_code, 200, response.content)
         with patch('tender_selection.views.notification_for', side_effect=AssertionError('Unexpected source request')):
@@ -114,6 +115,28 @@ class ProductEditingTests(TestCase):
         self.assertIsNone(response.context['display_items'][0]['finance']['purchase_total'])
         self.assertIsNone(response.context['product_finance_totals']['purchase_total'])
         self.assertEqual(response.context['product_calculation']['input_status']['state'], 'current')
+
+    def test_source_quantity_and_exclusion_need_explicit_confirmation(self):
+        state = product_editor(self.tender)
+        self.assertTrue(state['items'][0]['source_locked'])
+        state['items'][0]['quantity'] = '200'
+        with self.assertRaisesMessage(ValueError, 'Подтвердите изменение количества'):
+            save_products(self.user, self.tender.pk, state, route_only=True)
+        state = product_editor(self.tender)
+        state['items'][0]['nmck'] = '999'
+        with self.assertRaisesMessage(ValueError, 'Подтвердите изменение НМЦК'):
+            save_products(self.user, self.tender.pk, state, route_only=True)
+        state = product_editor(self.tender)
+        key = state['items'][0]['key']
+        state['items'] = []
+        with self.assertRaisesMessage(ValueError, 'Подтвердите исключение'):
+            save_products(self.user, self.tender.pk, state, route_only=True)
+        state['confirmations'] = {'quantity': [], 'nmck': [], 'exclusions': [key]}
+        save_products(self.user, self.tender.pk, state, route_only=True)
+        self.good.refresh_from_db()
+        self.source.refresh_from_db()
+        self.assertEqual(self.good.status, 'excluded')
+        self.assertTrue(self.source.is_active)
 
     def test_route_reads_working_quantity_and_preserves_evidence(self):
         from .calculation_v2_pipeline import routing_source_items

@@ -84,6 +84,8 @@ def _source_row(source, lines, notice, *, component=False):
                             unit=source.unit, provenance={})
     row = _row(model, 'component' if component else 'good', _matching_line(lines, source_id=source.pk))
     row['key'] = ('component-source-' if component else 'source-') + str(source.pk)
+    row['source_locked'] = not component and source.source_type != 'manual'
+    row['source_label'] = 'Исходная позиция закупки' if row['source_locked'] else ('Добавлен вручную' if not component else '')
     quote = notification_quote_source(source)
     index = quote.metadata.get('notification_index') if quote else None
     if not component and row['nmck'] == '' and type(index) is int and 0 <= index < len(notice):
@@ -103,6 +105,9 @@ def product_editor(tender):
         represented.update(source.pk for source in linked)
         previous = _matching_line(lines, good=good, source_id=linked[0].pk if len(linked) == 1 else None)
         row = _row(good, 'good', previous)
+        row['commercial_id'] = good.pk
+        row['source_locked'] = bool(linked) and any(source.source_type != 'manual' for source in linked)
+        row['source_label'] = 'Исходная позиция закупки' if row['source_locked'] else 'Добавлен вручную'
         if row['nmck'] == '' and not good.provenance.get('card_edit') and len(linked) == 1:
             from .document_enrichment import notification_quote_source
             quote_source = notification_quote_source(linked[0])
@@ -133,7 +138,8 @@ def product_editor(tender):
         for index, source in enumerate(parse_notification(tender.notification_raw or {}).get('items', [])):
             rows.append({'key': f'notice-{index}', 'name': source.get('name', ''), 'quantity': str(source.get('quantity') or ''),
                          'unit': source.get('unit', ''), 'mode': 'route', 'nmck': str(source.get('price') or ''),
-                         'material': '', 'application': '', 'logistics': '', 'group': '', 'components': []})
+                         'material': '', 'application': '', 'logistics': '', 'group': '', 'components': [],
+                         'source_locked': True, 'source_label': 'Исходная позиция закупки'})
     revision = signature({'items': rows, 'goods': [(g.pk, g.updated_at, input_basis(g)) for g in goods],
                           'sources': list(tender.v2_source_items.values('pk', 'created_at', 'is_active', 'requirements', 'metadata', 'quantity', 'unit')),
                           'notice': tender.notification_raw, 'conditions': tender.conditions,
@@ -249,11 +255,23 @@ def save_products(user, tender_id, state, *, route_updates=None, route_only=Fals
         raise ValueError('Товары или расчёт изменились. Откройте редактирование заново.')
     rows = deepcopy(state.get('items'))
     if route_only and isinstance(rows, list):
+        confirmations = state.get('confirmations') if isinstance(state.get('confirmations'), dict) else {}
+        confirmed_quantity = set(confirmations.get('quantity', []))
+        confirmed_nmck = set(confirmations.get('nmck', []))
+        confirmed_exclusions = set(confirmations.get('exclusions', []))
+        old_rows = {row['key']: row for row in current['items']}
+        submitted_keys = {row.get('key') for row in rows if isinstance(row, dict)}
+        unconfirmed = [key for key, old in old_rows.items()
+                       if old.get('source_locked') and key not in submitted_keys and key not in confirmed_exclusions]
+        if unconfirmed:
+            raise ValueError('Подтвердите исключение исходного товара.')
         def normalize(row, old):
             if not isinstance(row, dict):
                 raise ValueError('Некорректная позиция.')
-            if row.get('nmck', '') != old.get('nmck', ''):
-                raise ValueError('НМЦК берётся из извещения.')
+            if old.get('source_locked') and row.get('quantity', '') != old.get('quantity', '') and row.get('key') not in confirmed_quantity:
+                raise ValueError('Подтвердите изменение количества из извещения.')
+            if old.get('source_locked') and row.get('nmck', '') != old.get('nmck', '') and row.get('key') not in confirmed_nmck:
+                raise ValueError('Подтвердите изменение НМЦК из извещения.')
             # Legacy manual values remain in provenance/history, but never drive a new version.
             row.update(mode='route', cost_entry=old.get('cost_entry', 'parts'))
             for field in (*COST_FIELDS, 'total'):
@@ -261,7 +279,7 @@ def save_products(user, tender_id, state, *, route_updates=None, route_only=Fals
             children = {child['key']: child for child in old.get('components', [])}
             for child in row.get('components', []):
                 normalize(child, children.get(child.get('key'), {}))
-        prior = {row['key']: row for row in current['items']}
+        prior = old_rows
         for row in rows:
             normalize(row, prior.get(row.get('key'), {}))
     allowed = {row['key']: row for row in current['items']}
