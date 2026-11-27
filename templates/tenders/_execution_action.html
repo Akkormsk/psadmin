@@ -1,0 +1,19 @@
+{% if execution_card %}
+<a class="ts-work" href="{% url 'workboard_list' %}?board={{ execution_card.board_id }}" target="_top">В исполнении · {{ execution_card.board.name }} →</a>
+{% elif execution_boards %}
+<details class="ts-menu">
+  <summary class="ts-work">Передать в исполнение →</summary>
+  <div class="ts-menu__list" style="min-width:240px;padding:12px">
+    <form method="post" action="{% url 'workboard_tender_add' tender.pk %}{% if request.GET.workspace %}?workspace=1{% endif %}">
+      {% csrf_token %}
+      <label for="execution-board">Доска исполнения</label>
+      <select id="execution-board" name="board_id" required style="display:block;width:100%;margin:8px 0">
+        {% for board in execution_boards %}<option value="{{ board.pk }}">{{ board.name }}</option>{% endfor %}
+      </select>
+      <button type="submit" class="ts-work">Передать</button>
+    </form>
+  </div>
+</details>
+{% else %}
+<a class="ts-work" href="{% url 'workboard_list' %}" target="_top">Создать доску исполнения →</a>
+{% endif %}

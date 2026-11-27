@@ -49,7 +49,6 @@ def workboard_list(request):
         selected = boards[0]
 
     columns = []
-    available_tenders = Tender.objects.none()
     if selected:
         columns = list(
             WorkBoardColumn.objects.filter(board=selected).prefetch_related(
@@ -60,17 +59,11 @@ def workboard_list(request):
                 )
             )
         )
-        if request.user.is_superuser:
-            available_tenders = Tender.objects.filter(
-                outcome_status=Tender.OUTCOME_WON,
-                workboard_card__isnull=True,
-            ).order_by("-outcome_checked_at", "-pk")
 
     return render(request, "tenders/workboards.html", {
         "boards": boards,
         "selected_board": selected,
         "columns": columns,
-        "available_tenders": available_tenders,
     })
 
 
@@ -113,16 +106,17 @@ def workboard_task_create(request, board_id):
 
 @login_required
 @require_POST
-def workboard_tender_add(request, board_id):
-    board = _board_for_user(request.user, board_id)
+def workboard_tender_add(request, tender_id):
     if not request.user.is_superuser:
         raise PermissionDenied
-    tender = get_object_or_404(Tender, pk=request.POST.get("tender_id"))
+    tender = get_object_or_404(Tender, pk=tender_id, outcome_status=Tender.OUTCOME_WON)
+    board = get_object_or_404(_visible_boards(request.user), pk=request.POST.get("board_id"))
     try:
-        create_tender_card(board, tender)
+        card = create_tender_card(board, tender)
+        messages.success(request, "Тендер передан в исполнение.")
     except ValidationError as error:
         messages.error(request, _error_text(error))
-    return _board_redirect(board)
+    return redirect(reverse('tender_selection:detail', args=[tender.pk]) + ('?workspace=1' if request.GET.get('workspace') == '1' else ''))
 
 
 @login_required

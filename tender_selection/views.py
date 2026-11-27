@@ -908,8 +908,16 @@ def tender_detail(request, pk):
         for item in display_items:
             if item.get("source_id") in edit_key_by_source:
                 item["product_edit_key"] = edit_key_by_source[item["source_id"]]
+    execution_card, execution_boards = None, []
+    if request.user.is_superuser and not is_archived and tender.outcome_status == Tender.OUTCOME_WON:
+        from tenders.models import WorkBoard, WorkBoardCard
+        execution_card = WorkBoardCard.objects.filter(tender=tender).select_related("board").first()
+        if execution_card is None:
+            execution_boards = list(WorkBoard.objects.order_by("name", "pk"))
     response = render(request, "tender_selection/_analysis_result.html" if analysis_snapshot and request.GET.get("full_card") != "1" else "tender_selection/detail.html", {
         "tender": tender,
+        "execution_card": execution_card,
+        "execution_boards": execution_boards,
         "is_manual": is_manual,
         "display_purchase_number": (tender.raw or {}).get("display_number") or tender.purchase_number,
         "card": card,

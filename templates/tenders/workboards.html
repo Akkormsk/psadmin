@@ -3,13 +3,13 @@
 
 {% block title %}Доски — PSADMIN{% endblock %}
 
-{% block extra_css %}
+{% block extra_head %}
   <link rel="stylesheet" href="{% static 'tender_selection/tenders.css' %}">
-  <link rel="stylesheet" href="{% static 'tenders/workboards.css' %}">
+  <link rel="stylesheet" href="{% static 'tenders/workboards.css' %}?v=20261127-2">
 {% endblock %}
 
 {% block content %}
-<main class="workboards-page">
+<main class="container workboards-page">
   {% include "tender_selection/_nav.html" with active="workboards" %}
 
   <header class="workboards-head">
@@ -17,11 +17,13 @@
       <h1>Доски</h1>
       <p>Задачи и исполнение выигранных тендеров в одном рабочем пространстве.</p>
     </div>
-    <form method="post" action="{% url 'workboard_create' %}" class="workboards-inline-form">
+    <button type="button" onclick="document.getElementById('wb-new-board').showModal()">+ Новая доска</button>
+    <dialog id="wb-new-board" class="wb-dialog"><h2>Новая доска</h2><form method="post" action="{% url 'workboard_create' %}" class="workboards-inline-form">
       {% csrf_token %}
       <input name="name" maxlength="200" placeholder="Название новой доски" required>
       <button type="submit">Создать доску</button>
-    </form>
+      <button type="button" class="wb-secondary" onclick="this.closest('dialog').close()">Отмена</button>
+    </form></dialog>
   </header>
 
   {% if messages %}
@@ -37,36 +39,24 @@
       {% endfor %}
     </nav>
 
-    <section class="workboards-tools">
-      <form method="post" action="{% url 'workboard_task_create' selected_board.pk %}">
+    <section class="panel wb-panel"><div class="wb-toolbar"><strong>{{ selected_board.name }}</strong><div><button type="button" class="wb-secondary" onclick="document.getElementById('wb-new-column').showModal()">+ Колонка</button> <button type="button" onclick="document.getElementById('wb-new-task').showModal()">+ Задача</button></div></div>
+    <div class="workboards-tools">
+      <dialog id="wb-new-task" class="wb-dialog"><form method="post" action="{% url 'workboard_task_create' selected_board.pk %}">
         {% csrf_token %}
         <h2>Новая задача</h2>
         <input name="name" maxlength="300" placeholder="Что нужно сделать" required>
         <textarea name="description" rows="2" placeholder="Короткое пояснение — необязательно"></textarea>
-        <button type="submit">Добавить в очередь</button>
-      </form>
+        <button type="submit">Добавить в очередь</button><button type="button" class="wb-secondary" onclick="this.closest('dialog').close()">Отмена</button>
+      </form></dialog>
 
-      <form method="post" action="{% url 'workboard_column_create' selected_board.pk %}">
+      <dialog id="wb-new-column" class="wb-dialog"><form method="post" action="{% url 'workboard_column_create' selected_board.pk %}">
         {% csrf_token %}
         <h2>Новая колонка</h2>
         <input name="name" maxlength="120" placeholder="Например, В работе" required>
-        <button type="submit">Добавить колонку</button>
-      </form>
+        <button type="submit">Добавить колонку</button><button type="button" class="wb-secondary" onclick="this.closest('dialog').close()">Отмена</button>
+      </form></dialog>
 
-      {% if request.user.is_superuser and available_tenders %}
-        <form method="post" action="{% url 'workboard_tender_add' selected_board.pk %}">
-          {% csrf_token %}
-          <h2>Выигранный тендер</h2>
-          <select name="tender_id" required>
-            <option value="">Выберите тендер</option>
-            {% for tender in available_tenders %}
-              <option value="{{ tender.pk }}">{{ tender.purchase_number }} — {{ tender.title|default:tender.object_info|truncatechars:70 }}</option>
-            {% endfor %}
-          </select>
-          <button type="submit">Добавить на доску</button>
-        </form>
-      {% endif %}
-    </section>
+    </div>
 
     <section class="workboards-board" aria-label="{{ selected_board.name }}">
       {% for column in columns %}
@@ -101,11 +91,11 @@
           </div>
         </section>
       {% endfor %}
-    </section>
+    </section></section>
   {% else %}
     <section class="workboards-empty">
       <h2>Создайте первую доску</h2>
-      <p>В ней сразу появятся колонки «В очереди» и «Готово».</p>
+      <p>В ней сразу появятся колонки «В очереди» и «Готово».</p><button type="button" onclick="document.getElementById('wb-new-board').showModal()">+ Создать доску</button>
     </section>
   {% endif %}
 </main>
