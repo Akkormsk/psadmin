@@ -1,8 +1,14 @@
 from django.urls import path
 
-from . import assistant_ui, views
+from . import assistant_ui, views, workboard_views
 
 urlpatterns = [
+    path("boards/", workboard_views.workboard_list, name="workboard_list"),
+    path("boards/create/", workboard_views.workboard_create, name="workboard_create"),
+    path("boards/<int:board_id>/columns/create/", workboard_views.workboard_column_create, name="workboard_column_create"),
+    path("boards/<int:board_id>/tasks/create/", workboard_views.workboard_task_create, name="workboard_task_create"),
+    path("boards/<int:board_id>/tenders/add/", workboard_views.workboard_tender_add, name="workboard_tender_add"),
+    path("boards/cards/<int:card_id>/move/", workboard_views.workboard_card_move, name="workboard_card_move"),
     path("assistant/", assistant_ui.console, name="assistant_console"),
     path("assistant/conversations/", assistant_ui.conversations, name="assistant_conversations"),
     path("assistant/conversations/clear/", assistant_ui.conversations_clear, name="assistant_conversations_clear"),

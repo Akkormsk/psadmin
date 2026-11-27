@@ -1127,6 +1127,136 @@ class Task(models.Model):
         return self.name
 
 
+class WorkBoard(models.Model):
+    name = models.CharField("Название", max_length=200)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, verbose_name="Создал",
+        on_delete=models.PROTECT, related_name="workboards",
+    )
+    created_at = models.DateTimeField("Создана", auto_now_add=True)
+    updated_at = models.DateTimeField("Обновлена", auto_now=True)
+
+    class Meta:
+        ordering = ["name", "pk"]
+        verbose_name = "Доска"
+        verbose_name_plural = "Доски"
+
+    def __str__(self):
+        return self.name
+
+
+class WorkBoardColumn(models.Model):
+    class Kind(models.TextChoices):
+        QUEUE = "queue", "В очереди"
+        STANDARD = "standard", "Обычная"
+        DONE = "done", "Готово"
+
+    DEFAULT_QUEUE_NAME = "В очереди"
+    DEFAULT_DONE_NAME = "Готово"
+
+    board = models.ForeignKey(
+        WorkBoard, verbose_name="Доска", on_delete=models.CASCADE, related_name="columns",
+    )
+    name = models.CharField("Название", max_length=120)
+    kind = models.CharField("Назначение", max_length=16, choices=Kind.choices, default=Kind.STANDARD)
+    position = models.PositiveIntegerField("Порядок")
+    created_at = models.DateTimeField("Создана", auto_now_add=True)
+
+    class Meta:
+        ordering = ["position", "pk"]
+        verbose_name = "Колонка доски"
+        verbose_name_plural = "Колонки доски"
+        constraints = [
+            models.UniqueConstraint(fields=["board", "position"], name="unique_workboard_column_position"),
+            models.UniqueConstraint(
+                fields=["board", "kind"], condition=models.Q(kind="queue"),
+                name="unique_workboard_queue_column",
+            ),
+            models.UniqueConstraint(
+                fields=["board", "kind"], condition=models.Q(kind="done"),
+                name="unique_workboard_done_column",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.board}: {self.name}"
+
+
+class WorkBoardCard(models.Model):
+    board = models.ForeignKey(
+        WorkBoard, verbose_name="Доска", on_delete=models.CASCADE, related_name="cards",
+    )
+    column = models.ForeignKey(
+        WorkBoardColumn, verbose_name="Колонка", on_delete=models.PROTECT, related_name="cards",
+    )
+    task = models.OneToOneField(
+        Task, verbose_name="Задача", null=True, blank=True,
+        on_delete=models.CASCADE, related_name="workboard_card",
+    )
+    tender = models.OneToOneField(
+        "tender_selection.Tender", verbose_name="Тендер", null=True, blank=True,
+        on_delete=models.PROTECT, related_name="workboard_card",
+    )
+    position = models.PositiveIntegerField("Порядок", default=0)
+    completed_at = models.DateTimeField("Завершена", null=True, blank=True)
+    created_at = models.DateTimeField("Создана", auto_now_add=True)
+    updated_at = models.DateTimeField("Обновлена", auto_now=True)
+
+    class Meta:
+        ordering = ["position", "pk"]
+        verbose_name = "Карточка доски"
+        verbose_name_plural = "Карточки доски"
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(task__isnull=False, tender__isnull=True)
+                    | models.Q(task__isnull=True, tender__isnull=False)
+                ),
+                name="workboard_card_exactly_one_subject",
+            ),
+        ]
+
+    def _column_kind(self, using):
+        column = WorkBoardColumn.objects.using(using).filter(pk=self.column_id).values("board_id", "kind").first()
+        if column is None:
+            return None
+        if column["board_id"] != self.board_id:
+            raise ValidationError({"column": "Колонка должна принадлежать выбранной доске."})
+        return column["kind"]
+
+    def _validate_subject(self, using):
+        if bool(self.task_id) == bool(self.tender_id):
+            raise ValidationError("Карточка должна относиться к одной задаче или одному тендеру.")
+        if self.tender_id:
+            from tender_selection.models import Tender
+
+            if not Tender.objects.using(using).filter(
+                pk=self.tender_id, outcome_status=Tender.OUTCOME_WON,
+            ).exists():
+                raise ValidationError({"tender": "На доску исполнения можно добавить только выигранный тендер."})
+
+    def clean(self):
+        super().clean()
+        using = self._state.db or "default"
+        self._validate_subject(using)
+        self._column_kind(using)
+
+    def save(self, *args, **kwargs):
+        from django.db import router
+
+        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        self._validate_subject(using)
+        kind = self._column_kind(using)
+        self.completed_at = timezone.now() if kind == WorkBoardColumn.Kind.DONE else None
+        if kwargs.get("update_fields") is not None:
+            kwargs["update_fields"] = set(kwargs["update_fields"]) | {"completed_at"}
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        subject = self.task if self.task_id else self.tender
+        return str(subject)
+
+
 class TenderCommercialItem(models.Model):
     class Structure(models.TextChoices):
         SIMPLE = "simple", "Simple"
