@@ -133,6 +133,24 @@ class IncompleteRoiBadgeTests(TestCase):
 
 
 class CustomerOnKanbanCardTests(TestCase):
+    def test_board_shows_only_the_latest_working_calculation(self):
+        admin = get_user_model().objects.create_superuser("admin", password="x")
+        self.client.force_login(admin)
+        tender = Tender.objects.create(
+            purchase_number="0375200001226000004", title="Наградная атрибутика",
+            review=Tender.INTERESTING, status=Tender.PUSHED,
+            collecting_finished_at=timezone.now() + timedelta(days=3),
+        )
+        TenderEstimate.objects.create(owner=admin, tender=tender, tender_number=tender.purchase_number, name="Старый")
+        latest = TenderEstimate.objects.create(owner=admin, tender=tender, tender_number=tender.purchase_number, name="Текущий")
+
+        response = self.client.get("/tender-selection/?view=kanban")
+
+        columns = {column["key"]: column["cards"] for column in response.context["columns"]}
+        self.assertEqual(columns["review"], [])
+        self.assertEqual([card["pk"] for card in columns["calculation"]], [latest.pk])
+        self.assertEqual(response.context["nav_counts"]["board"], 1)
+
     def test_card_title_is_limited_to_three_visual_lines(self):
         admin = get_user_model().objects.create_superuser("admin", password="x")
         self.client.force_login(admin)

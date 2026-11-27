@@ -4,8 +4,8 @@
 <section data-product-editor data-save-url="{% url 'tender_selection:save_products' tender.pk %}">
   <div class="ts-product-edit-toolbar">
     <h3 class="settings-subtitle">Перечень товаров ({{ display_item_count }})</h3>
-    <div data-product-view-actions><button type="button" class="ts-quiet" data-product-add>+ Добавить товар</button><button type="button" class="ts-quiet" data-product-edit>Редактировать</button></div>
-    <div data-product-edit-actions hidden><button type="button" class="button-success" data-product-save>Сохранить</button><button type="button" class="button-secondary" data-product-cancel>Отмена</button><button type="button" class="ts-quiet" data-product-add>+ Добавить товар</button></div>
+    <div data-product-view-actions class="ts-product-edit-icons"><button type="button" class="ts-product-icon" data-product-add title="Добавить товар" aria-label="Добавить товар">+</button><button type="button" class="ts-product-icon" data-product-edit title="Редактировать перечень" aria-label="Редактировать перечень">✎</button></div>
+    <div data-product-edit-actions class="ts-product-edit-actions" hidden><button type="button" class="button-success" data-product-save>Сохранить</button><button type="button" class="button-secondary" data-product-cancel>Отмена</button></div>
     <span class="ts-sub" data-product-edit-status role="status"></span>
   </div>
   <div data-product-edit-table hidden></div>

@@ -162,7 +162,7 @@
     const estimate=savedEstimate(slot);
     // Exact saved source identity only: similarly named goods must never share a calculation.
     const matches=estimate?.lines.filter(line=>String(line.requirements?.source_item_id)===slot.dataset.sourceId) || [];
-    if(matches.length!==1||!matches[0].requirements?.production)return;
+    if(matches.length!==1||!matches[0].requirements?.production||matches[0].requirements.production.manual_plan_id||slot.querySelector('[data-manual-step-price]'))return;
     const editor={slot,estimate,line:matches[0],busy:false};editors.set(slot,editor);draw(editor);
   }
   document.addEventListener('ps-product-selected',event=>mount(event.detail.content));

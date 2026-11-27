@@ -84,6 +84,8 @@ def _source_row(source, lines, notice, *, component=False):
                             unit=source.unit, provenance={})
     row = _row(model, 'component' if component else 'good', _matching_line(lines, source_id=source.pk))
     row['key'] = ('component-source-' if component else 'source-') + str(source.pk)
+    row['source_locked'] = not component and source.source_type != 'manual'
+    row['source_label'] = 'Исходная позиция закупки' if row['source_locked'] else ('Добавлен вручную' if not component else '')
     quote = notification_quote_source(source)
     index = quote.metadata.get('notification_index') if quote else None
     if not component and row['nmck'] == '' and type(index) is int and 0 <= index < len(notice):
@@ -103,6 +105,9 @@ def product_editor(tender):
         represented.update(source.pk for source in linked)
         previous = _matching_line(lines, good=good, source_id=linked[0].pk if len(linked) == 1 else None)
         row = _row(good, 'good', previous)
+        row['commercial_id'] = good.pk
+        row['source_locked'] = bool(linked) and any(source.source_type != 'manual' for source in linked)
+        row['source_label'] = 'Исходная позиция закупки' if row['source_locked'] else 'Добавлен вручную'
         if row['nmck'] == '' and not good.provenance.get('card_edit') and len(linked) == 1:
             from .document_enrichment import notification_quote_source
             quote_source = notification_quote_source(linked[0])
@@ -133,7 +138,8 @@ def product_editor(tender):
         for index, source in enumerate(parse_notification(tender.notification_raw or {}).get('items', [])):
             rows.append({'key': f'notice-{index}', 'name': source.get('name', ''), 'quantity': str(source.get('quantity') or ''),
                          'unit': source.get('unit', ''), 'mode': 'route', 'nmck': str(source.get('price') or ''),
-                         'material': '', 'application': '', 'logistics': '', 'group': '', 'components': []})
+                         'material': '', 'application': '', 'logistics': '', 'group': '', 'components': [],
+                         'source_locked': True, 'source_label': 'Исходная позиция закупки'})
     revision = signature({'items': rows, 'goods': [(g.pk, g.updated_at, input_basis(g)) for g in goods],
                           'sources': list(tender.v2_source_items.values('pk', 'created_at', 'is_active', 'requirements', 'metadata', 'quantity', 'unit')),
                           'notice': tender.notification_raw, 'conditions': tender.conditions,
@@ -224,6 +230,8 @@ def _route_price(good, previous, unchanged):
         edit = previous.requirements.get('card_edit', {})
         if edit.get('route_price'):
             return edit['route_price']
+        if edit.get('mode') == 'manual' or not previous.requirements.get('production'):
+            return {'values': {}, 'known': False, 'basis': None, 'requirements': {}}
         from .product_financials import _cost_complete
         old_values = {field + '_unit': getattr(previous, field + '_unit') for field in COST_FIELDS}
         complete = _cost_complete({'name': previous.name, 'quantity': previous.quantity, 'requirements': previous.requirements, **old_values})
@@ -235,7 +243,7 @@ def _route_price(good, previous, unchanged):
 
 
 @transaction.atomic
-def save_products(user, tender_id, state, *, route_updates=None):
+def save_products(user, tender_id, state, *, route_updates=None, route_only=False):
     if not user.is_superuser:
         raise PermissionDenied
     tender = Tender.objects.select_for_update().get(pk=tender_id)
@@ -245,7 +253,35 @@ def save_products(user, tender_id, state, *, route_updates=None):
     current = product_editor(tender)
     if not isinstance(state, dict) or state.get('revision') != current['revision']:
         raise ValueError('Товары или расчёт изменились. Откройте редактирование заново.')
-    rows = state.get('items')
+    rows = deepcopy(state.get('items'))
+    if route_only and isinstance(rows, list):
+        confirmations = state.get('confirmations') if isinstance(state.get('confirmations'), dict) else {}
+        confirmed_quantity = set(confirmations.get('quantity', []))
+        confirmed_nmck = set(confirmations.get('nmck', []))
+        confirmed_exclusions = set(confirmations.get('exclusions', []))
+        old_rows = {row['key']: row for row in current['items']}
+        submitted_keys = {row.get('key') for row in rows if isinstance(row, dict)}
+        unconfirmed = [key for key, old in old_rows.items()
+                       if old.get('source_locked') and key not in submitted_keys and key not in confirmed_exclusions]
+        if unconfirmed:
+            raise ValueError('Подтвердите исключение исходного товара.')
+        def normalize(row, old):
+            if not isinstance(row, dict):
+                raise ValueError('Некорректная позиция.')
+            if old.get('source_locked') and row.get('quantity', '') != old.get('quantity', '') and row.get('key') not in confirmed_quantity:
+                raise ValueError('Подтвердите изменение количества из извещения.')
+            if old.get('source_locked') and row.get('nmck', '') != old.get('nmck', '') and row.get('key') not in confirmed_nmck:
+                raise ValueError('Подтвердите изменение НМЦК из извещения.')
+            # Legacy manual values remain in provenance/history, but never drive a new version.
+            row.update(mode='route', cost_entry=old.get('cost_entry', 'parts'))
+            for field in (*COST_FIELDS, 'total'):
+                row[field] = old.get(field, '')
+            children = {child['key']: child for child in old.get('components', [])}
+            for child in row.get('components', []):
+                normalize(child, children.get(child.get('key'), {}))
+        prior = old_rows
+        for row in rows:
+            normalize(row, prior.get(row.get('key'), {}))
     allowed = {row['key']: row for row in current['items']}
     _validate(rows, allowed)
     for row in rows:
@@ -358,13 +394,19 @@ def save_products(user, tender_id, state, *, route_updates=None):
     from .tender_data import mark_tender_inputs_changed
     if changed or excluded:
         mark_tender_inputs_changed(tender, commercial_ids=changed + excluded)
-    settings = TenderSettings.objects.first() or TenderSettings()
-    estimate = TenderEstimate.objects.create(tender=tender, owner=user, supersedes=previous,
-        name=tender.title[:300], tender_number=tender.purchase_number,
-        reduction_percent=previous.reduction_percent if previous else settings.default_reduction_percent,
-        russia_delivery=previous.russia_delivery if previous else 0,
-        vat_rate_snapshot=previous.vat_rate_snapshot if previous else settings.vat_rate,
-        document_analysis=deepcopy(previous.document_analysis) if previous else {})
+    if previous:
+        estimate = previous
+        estimate.name = tender.title[:300]
+        estimate.tender_number = tender.purchase_number
+        estimate.supersedes = None
+        estimate.lines.all().delete()
+        estimate.save(update_fields=['name', 'tender_number', 'supersedes', 'updated_at'])
+    else:
+        settings = TenderSettings.objects.first() or TenderSettings()
+        estimate = TenderEstimate.objects.create(tender=tender, owner=user,
+            name=tender.title[:300], tender_number=tender.purchase_number,
+            reduction_percent=settings.default_reduction_percent,
+            russia_delivery=0, vat_rate_snapshot=settings.vat_rate)
     lines = []
     for good, row, route, old_line in saved:
         nmck = _number(row.get('nmck'), optional=True)
@@ -497,6 +539,8 @@ def save_route_prices(user, estimate, data):
         requirements = row.get('requirements')
         if not isinstance(requirements, dict) or not isinstance(requirements.get('production'), dict):
             continue
+        if line.requirements.get('production', {}).get('manual_plan_id'):
+            raise ValueError('Изменяйте цену в действующем маршруте товара.')
         if requirements['production'] == line.requirements.get('production'):
             continue
         from .product_financials import _cost_complete
@@ -511,7 +555,7 @@ def save_route_prices(user, estimate, data):
                                            'known': complete, 'requirements': {'production': deepcopy(production)}}
     if not updates:
         return estimate
-    save_products(user, estimate.tender_id, product_editor(estimate.tender), route_updates=updates)
+    save_products(user, estimate.tender_id, product_editor(estimate.tender), route_updates=updates, route_only=True)
     return estimate.tender.estimates.order_by('-updated_at', '-pk').first()
 
 
@@ -555,3 +599,59 @@ def working_route_snapshot_sources(tender, sources):
         if source is not None:
             result[source.pk] = source
     return list(result.values())
+
+
+def manual_step_prices(plan, subject, quantity):
+    """Read the existing route price snapshot, never guess links to older steps."""
+    edit = (subject.provenance or {}).get('card_edit', {})
+    route = edit.get('route_price') or {}
+    production = (route.get('requirements') or {}).get('production') or {}
+    basis = component_basis(subject) if isinstance(subject, CalculationComponent) else input_basis(subject)
+    if production.get('manual_plan_id') != plan.pk or route.get('basis') != basis:
+        return {}
+    if str(production.get('quantity')) != str(quantity.normalize()):
+        return {}
+    return {str(cost['step_id']): cost for cost in production.get('costs', [])}
+
+
+@transaction.atomic
+def save_manual_step(user, tender_id, source_id, plan_id, step_id, mode, amount):
+    if not user.is_superuser:
+        raise PermissionDenied
+    tender = Tender.objects.select_for_update().get(pk=tender_id)
+    from .calculation_v2_pipeline import source_route_snapshots
+    from .models import ComponentRoutePlan
+    snapshot = source_route_snapshots(tender).get(source_id) or {}
+    if snapshot.get('state') != 'ready' or snapshot.get('plan_id') != plan_id or snapshot.get('pending_changes'):
+        raise ValueError('Маршрут изменился или не согласован. Обновите карточку.')
+    plan = ComponentRoutePlan.objects.select_for_update().select_related('commercial_item', 'component').get(pk=plan_id)
+    good = plan.commercial_item
+    if good.status != 'active' or not plan.component_id or plan.component.status != 'active':
+        raise ValueError('Товар или компонент не принят.')
+    subject = good if good.structure == TenderCommercialItem.Structure.SIMPLE else plan.component
+    quantity = good.quantity if subject == good else subject.effective_quantity
+    if quantity is None or quantity <= 0:
+        raise ValueError('Неизвестно количество товара.')
+    steps = snapshot['steps']
+    if step_id not in {step['id'] for step in steps} or mode not in ('unit', 'total'):
+        raise ValueError('Некорректный этап или способ ввода.')
+    value = _number(amount, optional=True)
+    if value is not None and value != value.quantize(Decimal('0.01')):
+        raise ValueError('Укажите цену с точностью до копейки.')
+    from .services import _money
+    from .routes import _totals_from_costs
+    costs = manual_step_prices(plan, subject, quantity)
+    if value is None:
+        costs.pop(str(step_id), None)
+    else:
+        total = _money(value * quantity if mode == 'unit' else value)
+        costs[str(step_id)] = {'step_id': step_id, 'amount_total': str(total), 'source': 'Ручной ввод',
+            'entry_mode': mode, 'entry_amount': str(value), 'actor_id': user.pk, 'at': timezone.now().isoformat()}
+    ordered = [dict(costs[str(step['id'])], process_name=step['name']) for step in steps if str(step['id']) in costs]
+    totals = _totals_from_costs(ordered, quantity)
+    production = {'stage': 'training_dialogue', 'manual_plan_id': plan.pk, 'quantity': str(quantity.normalize()),
+        'route': {'processes': steps}, 'costs': ordered, 'totals': totals}
+    key = f'good-{good.pk}' if subject == good else f'component-{subject.pk}'
+    update = {'values': {'material': totals['material_unit'], 'application': '0', 'logistics': '0'},
+        'known': len(ordered) == len(steps), 'requirements': {'production': production}}
+    return save_products(user, tender_id, product_editor(tender), route_updates={key: update}, route_only=True)

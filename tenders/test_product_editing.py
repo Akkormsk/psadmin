@@ -20,7 +20,7 @@ class ProductEditingTests(TestCase):
     def save(self, state):
         return save_products(self.user, self.tender.pk, state)
 
-    def test_edit_manual_price_preserves_sources_and_history(self):
+    def test_edit_manual_price_preserves_sources_and_updates_one_working_estimate(self):
         original = deepcopy(self.tender.notification_raw)
         state = product_editor(self.tender)
         row = state['items'][0]
@@ -38,8 +38,10 @@ class ProductEditingTests(TestCase):
         state = product_editor(self.tender)
         state['items'][0]['material'] = '70'
         self.save(state)
-        self.assertEqual(estimate.lines.get().material_unit, 50)
-        self.assertEqual(self.tender.estimates.latest('pk').supersedes_id, estimate.pk)
+        self.assertEqual(self.tender.estimates.count(), 1)
+        self.assertEqual(self.tender.estimates.latest('pk').pk, estimate.pk)
+        self.assertEqual(estimate.lines.get().material_unit, 70)
+        self.assertIsNone(estimate.supersedes_id)
 
     def test_read_cancel_and_conflict_do_not_write(self):
         state = product_editor(self.tender)
@@ -103,7 +105,8 @@ class ProductEditingTests(TestCase):
         from unittest.mock import patch
         self.client.force_login(self.user)
         state = product_editor(self.tender)
-        state['items'][0].update(quantity='200', mode='manual', cost_entry='parts', material='50', application='10', logistics='0', nmck='100')
+        state['items'][0].update(quantity='200')
+        state['confirmations'] = {'quantity': [state['items'][0]['key']], 'nmck': [], 'exclusions': []}
         response = self.client.post(reverse('tender_selection:save_products', args=[self.tender.pk]), state, content_type='application/json', secure=True)
         self.assertEqual(response.status_code, 200, response.content)
         with patch('tender_selection.views.notification_for', side_effect=AssertionError('Unexpected source request')):
@@ -111,9 +114,31 @@ class ProductEditingTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'data-product-edit')
         self.assertEqual(response.context['display_items'][0]['quantity'], 200)
-        self.assertEqual(response.context['display_items'][0]['finance']['purchase_total'], Decimal('12000'))
-        self.assertEqual(response.context['product_finance_totals']['purchase_total'], Decimal('12000'))
+        self.assertIsNone(response.context['display_items'][0]['finance']['purchase_total'])
+        self.assertIsNone(response.context['product_finance_totals']['purchase_total'])
         self.assertEqual(response.context['product_calculation']['input_status']['state'], 'current')
+
+    def test_source_quantity_and_exclusion_need_explicit_confirmation(self):
+        state = product_editor(self.tender)
+        self.assertTrue(state['items'][0]['source_locked'])
+        state['items'][0]['quantity'] = '200'
+        with self.assertRaisesMessage(ValueError, 'Подтвердите изменение количества'):
+            save_products(self.user, self.tender.pk, state, route_only=True)
+        state = product_editor(self.tender)
+        state['items'][0]['nmck'] = '999'
+        with self.assertRaisesMessage(ValueError, 'Подтвердите изменение НМЦК'):
+            save_products(self.user, self.tender.pk, state, route_only=True)
+        state = product_editor(self.tender)
+        key = state['items'][0]['key']
+        state['items'] = []
+        with self.assertRaisesMessage(ValueError, 'Подтвердите исключение'):
+            save_products(self.user, self.tender.pk, state, route_only=True)
+        state['confirmations'] = {'quantity': [], 'nmck': [], 'exclusions': [key]}
+        save_products(self.user, self.tender.pk, state, route_only=True)
+        self.good.refresh_from_db()
+        self.source.refresh_from_db()
+        self.assertEqual(self.good.status, 'excluded')
+        self.assertTrue(self.source.is_active)
 
     def test_route_reads_working_quantity_and_preserves_evidence(self):
         from .calculation_v2_pipeline import routing_source_items
@@ -163,7 +188,7 @@ class ProductEditingTests(TestCase):
         posted = {'id': line.pk, 'name': line.name, 'quantity': str(line.quantity), 'nmck_unit': str(line.nmck_unit),
                   'group_key': '', 'group_name': '', 'material_unit': '999', 'requirements': {'production': production}}
         updated = save_route_prices(self.user, estimate, {'lines_json': json.dumps([posted])})
-        self.assertEqual(updated.lines.get().material_unit, 42)
+        self.assertEqual(updated.lines.get().material_unit, 25)
         state = product_editor(self.tender)
         state['items'][0]['mode'] = 'route'
         self.save(state)

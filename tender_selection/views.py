@@ -6,7 +6,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
-from django.db.models import BooleanField, Case, Count, F, Q, Value, When
+from django.db.models import BooleanField, Case, Count, F, OuterRef, Q, Subquery, Value, When
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -325,6 +325,13 @@ def _kanban_toggle_qs(dirs, key):
     return urlencode({f"dir_{k}": v for k, v in flipped.items() if v == "asc"})
 
 
+def _latest_tender_estimates(queryset):
+    """One live working calculation per tender; older rows are legacy history, not board cards."""
+    from tenders.models import TenderEstimate
+    latest_pk = TenderEstimate.objects.filter(tender_id=OuterRef("tender_id")).order_by("-updated_at", "-pk").values("pk")[:1]
+    return queryset.filter(pk=Subquery(latest_pk))
+
+
 def kanban(request):
     """Единая доска жизненного цикла тендера — не новая сущность, а объединённое
     чтение Tender (ещё не в расчёте) и TenderEstimate (расчёт, из любого
@@ -346,7 +353,7 @@ def kanban(request):
 
     # «Входящие» больше не колонка канбана — это отдельный список (tender_list);
     # сюда тендер попадает только после «В работу» (review != unreviewed).
-    review_tenders = _visible(Tender.objects.filter(status=Tender.NEW).exclude(review=Tender.UNREVIEWED), "review")
+    review_tenders = _visible(Tender.objects.filter(status=Tender.NEW).exclude(review=Tender.UNREVIEWED).exclude(estimates__isnull=False), "review")
     orgs = {o.inn: o for o in Organization.objects.filter(inn__in={t.customer_inn for t in review_tenders if t.customer_inn})}
     for t in review_tenders:
         t.org = orgs.get(t.customer_inn)
@@ -356,9 +363,9 @@ def kanban(request):
 
     from tenders.models import TenderEstimate
 
-    live_estimates = TenderEstimate.objects.filter(
+    live_estimates = _latest_tender_estimates(TenderEstimate.objects.filter(
         tender__isnull=False,
-    ).exclude(tender__status=Tender.DISMISSED).select_related("tender")
+    ).exclude(tender__status=Tender.DISMISSED)).select_related("tender")
     estimate_orgs = {
         org.inn: org for org in Organization.objects.filter(
             inn__in=live_estimates.values_list("tender__customer_inn", flat=True),
@@ -427,9 +434,9 @@ def _board_count(settings) -> int:
     from tenders.models import TenderEstimate
 
     review, _hidden, _expired = visible_found_tenders(
-        Tender.objects.filter(status=Tender.NEW).exclude(review=Tender.UNREVIEWED).only("title", "object_info", "collecting_finished_at", "kanban_visible_until"),  include_board_pins=True,
+        Tender.objects.filter(status=Tender.NEW).exclude(review=Tender.UNREVIEWED).exclude(estimates__isnull=False).only("title", "object_info", "collecting_finished_at", "kanban_visible_until"),  include_board_pins=True,
     )
-    estimates = TenderEstimate.objects.filter(tender__isnull=False).exclude(tender__status=Tender.DISMISSED).exclude(Q(tender__outcome_status=Tender.OUTCOME_DRAFT, tender__collecting_finished_at__lt=timezone.now()) & ~Q(tender__kanban_visible_until__gt=timezone.now())).count()
+    estimates = TenderEstimate.objects.filter(tender__isnull=False).exclude(tender__status=Tender.DISMISSED).exclude(Q(tender__outcome_status=Tender.OUTCOME_DRAFT, tender__collecting_finished_at__lt=timezone.now()) & ~Q(tender__kanban_visible_until__gt=timezone.now())).values("tender_id").distinct().count()
     return len(review) + estimates
 
 
@@ -1731,7 +1738,21 @@ def save_products_action(request, pk):
     from tenders.product_editing import save_products
     try:
         state = json.loads(request.body)
-        result = save_products(request.user, pk, state)
+        result = save_products(request.user, pk, state, route_only=True)
     except (ValueError, TypeError) as exc:
         return JsonResponse({'error': str(exc)}, status=400)
     return JsonResponse(result)
+
+
+@superuser_required
+@require_POST
+def save_manual_step_action(request, pk):
+    import json
+    from tenders.product_editing import save_manual_step
+    try:
+        data = json.loads(request.body)
+        save_manual_step(request.user, pk, int(data['source_id']), int(data['plan_id']),
+                         int(data['step_id']), data['mode'], data.get('amount'))
+    except (ValueError, TypeError, KeyError) as exc:
+        return JsonResponse({'error': str(exc)}, status=400)
+    return JsonResponse({'saved': True})

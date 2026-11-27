@@ -106,12 +106,13 @@ class ManagerWorklistTests(TestCase):
 
     def test_page_opens_on_active_tenders_by_default(self):
         tender = Tender.objects.create(law="fz44", purchase_number="1", object_info="Тендер")
+        ready_source = Tender.objects.create(law="fz44", purchase_number="2", object_info="Готовый тендер")
         active_tender = TenderEstimate.objects.create(
             owner=self.user, tender=tender, tender_number="1", name="В работе",
             summary_snapshot={"is_incomplete": True},
         )
         ready_tender = TenderEstimate.objects.create(
-            owner=self.user, tender=tender, tender_number="2", name="Готовый тендер",
+            owner=self.user, tender=ready_source, tender_number="2", name="Готовый тендер",
             summary_snapshot={"is_incomplete": False},
         )
         OrderEstimate.objects.create(owner=self.user, order_number="1", name="Самостоятельный")
@@ -121,6 +122,16 @@ class ManagerWorklistTests(TestCase):
         self.assertContains(response, active_tender.name)
         self.assertNotContains(response, ready_tender.name)
         self.assertNotContains(response, "Самостоятельный")
+
+    def test_worklist_hides_legacy_calculation_versions(self):
+        tender = Tender.objects.create(law="fz44", purchase_number="1", object_info="Тендер")
+        old = TenderEstimate.objects.create(owner=self.user, tender=tender, tender_number="1", name="Старая версия")
+        current = TenderEstimate.objects.create(owner=self.user, tender=tender, tender_number="1", name="Текущий расчёт")
+
+        response = self.client.get(reverse("tender_home"), {"kind": "tender", "worklist": ""})
+
+        self.assertNotContains(response, old.name)
+        self.assertContains(response, current.name)
 
     def test_archived_tender_disappears_from_the_list_like_it_does_from_kanban(self):
         """То же условие, что и на канбане (tender.status == DISMISSED) —
