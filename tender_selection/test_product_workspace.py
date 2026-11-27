@@ -99,7 +99,8 @@ class ProductWorkspaceTests(SimpleTestCase):
 
     def test_quantity_tz_and_conditional_gisp_placeholder(self):
         html = self.render_workspace()
-        self.assertIn('<span class="ts-product-quantity">100 шт.</span>', html)
+        self.assertIn('<span class="ts-product-quantity">100</span>', html)
+        self.assertIn('<span class="ts-product-unit">шт.</span>', html)
         self.assertIn('<summary>Техническое задание · 1</summary>', html)
         self.assertIn('data-regime-indicator', html)
         self.assertIn('Количество', html)

@@ -65,3 +65,9 @@ def rub_precise(value):
         return group_number(format(number.quantize(Decimal("0.01")), ".2f").replace(".", ",")) + NBSP + "₽"
     except (InvalidOperation, ValueError, TypeError):
         return "—"
+
+
+@register.filter
+def friendly_unit(value):
+    from tenders.units import display_unit
+    return display_unit(value)

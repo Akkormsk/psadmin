@@ -147,7 +147,8 @@ def product_editor(tender):
                           'sources': list(tender.v2_source_items.values('pk', 'created_at', 'is_active', 'requirements', 'metadata', 'quantity', 'unit')),
                           'notice': tender.notification_raw, 'conditions': tender.conditions,
                           'estimate': (estimate.pk, estimate.updated_at) if estimate else None})
-    return {'items': rows, 'revision': revision}
+    from .units import okei_units
+    return {'items': rows, 'revision': revision, 'units': okei_units()}
 
 
 def _number(value, *, optional=False, positive=False):

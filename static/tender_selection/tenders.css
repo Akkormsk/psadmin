@@ -375,9 +375,11 @@ body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel { pad
 .ts-tab-panel .ts-notice-links { margin:0 0 16px; }
 
 /* Saved product finances: the same cells in the list and selected product. */
-.ts-product-select,.ts-products-columns { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr) minmax(0,4fr) auto; gap:12px; }
+.ts-product-select,.ts-products-columns { display:grid; grid-template-columns:minmax(0,2fr) minmax(70px,.65fr) minmax(78px,.35fr) minmax(0,4fr) auto; gap:12px; }
 .ts-product-select .ts-product-quantity { display:block; white-space:nowrap; text-align:right; font-size:12px; font-weight:400; }
+.ts-product-select .ts-product-unit { display:block; white-space:nowrap; font-size:12px; font-weight:400; }
 .ts-quantity-heading { text-align:right; }
+.ts-column-lock{position:relative;display:inline-block;width:8px;height:6px;margin-left:3px;border:1px solid currentColor;border-radius:2px;vertical-align:1px;opacity:.7}.ts-column-lock::before{content:"";position:absolute;left:1px;top:-5px;width:4px;height:5px;border:1px solid currentColor;border-bottom:0;border-radius:4px 4px 0 0}
 .ts-product-financials { display:block; min-width:0; }
 .ts-finance-values { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; min-width:0; }
 .ts-finance-cell { display:block; min-width:0; text-align:right; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
@@ -399,14 +401,16 @@ body.workspace-embedded .ts-detail--document .ts-tab-panel > details.panel { pad
 .ts-product-cost-total b { font-size:17px; font-variant-numeric:tabular-nums; }
 .ts-product-cost-total small { grid-column:2; text-align:right; font-size:11px; color:var(--ink-3); }
 .has-selection .ts-products-columns,.has-selection .ts-product-select > .ts-product-financials { display:none; }
-.has-selection .ts-product-select { grid-template-columns:minmax(0,1fr) auto auto; }
+.has-selection .ts-product-select { grid-template-columns:minmax(0,1fr) auto auto auto; }
 .has-selection .ts-product-select .ts-product-quantity { grid-row:1; grid-column:2; font-size:11px; }
-.has-selection .ts-product-select > [aria-hidden] { grid-row:1; grid-column:3; }
+.has-selection .ts-product-select .ts-product-unit { grid-row:1; grid-column:3; font-size:11px; }
+.has-selection .ts-product-select > [aria-hidden] { grid-row:1; grid-column:4; }
 @media(max-width:650px) {
   .ts-products-columns { display:none; }
-  .ts-product-select { grid-template-columns:minmax(0,1fr) auto auto; }
+  .ts-product-select { grid-template-columns:minmax(0,1fr) auto auto auto; }
   .ts-product-select .ts-product-quantity { grid-column:2; grid-row:1; }
-  .ts-product-select > [aria-hidden] { grid-column:3; grid-row:1; }
+  .ts-product-select .ts-product-unit { grid-column:3; grid-row:1; }
+  .ts-product-select > [aria-hidden] { grid-column:4; grid-row:1; }
   .ts-product-select > .ts-product-financials { grid-column:1/-1; }
   .ts-product-select .ts-finance-cell::before { content:attr(data-label); display:block; font-size:9px; color:var(--ink-3); }
   .ts-finance-values { gap:8px; }

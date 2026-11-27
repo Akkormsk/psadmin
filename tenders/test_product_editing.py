@@ -125,6 +125,10 @@ class ProductEditingTests(TestCase):
         response = self.client.get(reverse('tender_selection:detail', args=[tender.pk]), {'analysis_snapshot': '1', 'full_card': '1'}, secure=True)
         self.assertContains(response, 'data-product-edit-key="notice-0"')
 
+    def test_editor_uses_cached_okei_units(self):
+        state = product_editor(self.tender)
+        self.assertIn({'code': '055', 'name': 'Квадратный метр', 'symbol': 'м^2'}, state['units'])
+
     def test_document_source_rows_use_the_matching_commercial_editor_key(self):
         from django.urls import reverse
         self.source.source_type = 'document_extraction'
