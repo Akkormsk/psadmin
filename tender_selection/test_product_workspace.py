@@ -46,7 +46,7 @@ class ProductWorkspaceTests(SimpleTestCase):
 
     def render_workspace(self, source_id=42, regime_status='unknown'):
         item = {
-            'source_id': source_id, 'name': 'Блокнот', 'quantity': 100, 'unit': 'шт.',
+            'source_id': source_id, 'commercial_id': 12, 'name': 'Блокнот', 'quantity': 100, 'unit': 'шт.',
             'national_regime': {'status': regime_status},
             'tz_rows': [{'name': 'Формат', 'value': 'А5'}],
             'composition_question': 'Выберите состав', 'composition_question_id': 9,
@@ -69,6 +69,7 @@ class ProductWorkspaceTests(SimpleTestCase):
         html = self.render_workspace()
         self.assertIn('data-products-workspace', html)
         self.assertIn('data-product-key="source-42"', html)
+        self.assertIn('data-product-edit-key="good-12"', html)
         self.assertIn('data-product-key="group-17"', html)
         self.assertIn('Формат', html)
         self.assertIn('А5', html)
@@ -85,6 +86,11 @@ class ProductWorkspaceTests(SimpleTestCase):
             'tender': SimpleNamespace(pk=7),
         })
         self.assertNotIn('data-products-workspace', html)
+        html = render_to_string('tender_selection/_analysis_result.html', {
+            'tender': SimpleNamespace(pk=7), 'product_editor': {'revision': 'test', 'items': []},
+            'display_item_count': 0,
+        })
+        self.assertIn('data-products-workspace', html)
 
     def test_group_component_without_source_keeps_matching_selection_key(self):
         html = self.render_workspace(source_id=None)

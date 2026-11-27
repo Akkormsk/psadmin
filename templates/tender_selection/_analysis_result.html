@@ -26,7 +26,7 @@
     {% endif %}
     {% include "tender_selection/_product_editor.html" %}
     {% if not product_editor and display_items %}<h3 class="settings-subtitle">Перечень товаров ({{ display_item_count }})</h3>{% endif %}
-    {% if display_items %}
+    {% if display_items or product_editor %}
     <div class="ts-products-workspace" data-products-workspace>
       <div class="ts-products-list" data-products-list aria-label="Список товаров">
         <div class="ts-products-columns" aria-hidden="true"><span>Товар</span><span class="ts-quantity-heading">Количество</span><span class="ts-finance-values"><span>НМЦК</span><span>Себестоимость</span><span>РРЦ</span><span>Прибыль*</span></span><span></span></div>
