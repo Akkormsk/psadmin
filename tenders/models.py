@@ -1199,6 +1199,7 @@ class WorkBoardCard(models.Model):
     )
     position = models.PositiveIntegerField("Порядок", default=0)
     completed_at = models.DateTimeField("Завершена", null=True, blank=True)
+    import_key = models.CharField("Ключ импорта", max_length=64, null=True, blank=True, editable=False)
     created_at = models.DateTimeField("Создана", auto_now_add=True)
     updated_at = models.DateTimeField("Обновлена", auto_now=True)
 
@@ -1214,6 +1215,7 @@ class WorkBoardCard(models.Model):
                 ),
                 name="workboard_card_exactly_one_subject",
             ),
+            models.UniqueConstraint(fields=["board", "import_key"], name="unique_workboard_import_key"),
         ]
 
     def _column_kind(self, using):
@@ -1270,6 +1272,7 @@ class TenderCommercialItem(models.Model):
     source_items = models.ManyToManyField(TenderSourceItem, related_name="commercial_items")
     source_key = models.CharField(max_length=160)
     display_name = models.TextField()
+    description = models.TextField("Описание", blank=True)
     quantity = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
     unit = models.CharField(max_length=64, blank=True)
     requirements = models.JSONField(default=dict, blank=True)
@@ -1444,15 +1447,55 @@ class ComponentOperationStep(models.Model):
     должны исполняться последовательно; один step является полным valid route.
     """
     route_plan = models.ForeignKey(ComponentRoutePlan, on_delete=models.CASCADE, related_name="steps")
-    process = models.ForeignKey(ProcessDefinition, on_delete=models.PROTECT, related_name="v2_operation_steps")
+    process = models.ForeignKey(ProcessDefinition, on_delete=models.PROTECT, related_name="v2_operation_steps", null=True, blank=True)
+    manual_name = models.CharField("Название ручного этапа", max_length=300, blank=True, default="")
     position = models.PositiveIntegerField()
     details = models.JSONField(default=dict, blank=True)
     status = models.CharField(max_length=32, default="planned")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["route_plan", "position"], name="unique_v2_route_step_position")]
+        constraints = [
+            models.UniqueConstraint(fields=["route_plan", "position"], name="unique_v2_route_step_position"),
+            models.CheckConstraint(condition=(
+                models.Q(process__isnull=False, manual_name="") |
+                (models.Q(process__isnull=True) & ~models.Q(manual_name=""))
+            ), name="v2_step_process_or_manual_name"),
+        ]
         ordering = ["position", "pk"]
+
+    @property
+    def display_name(self):
+        return self.manual_name or self.process.name
+
+    def save(self, *args, **kwargs):
+        if self.process_id is None:
+            self.manual_name = self.manual_name.strip()
+            if not self.manual_name or not self.route_plan.commercial_item.task_id:
+                raise ValidationError("Ручной этап без техоперации допустим только для задачи.")
+        elif self.manual_name:
+            raise ValidationError("У этапа должна быть техоперация или ручное название, не оба.")
+        return super().save(*args, **kwargs)
+
+
+class WorkCheckpoint(models.Model):
+    step = models.ForeignKey(ComponentOperationStep, on_delete=models.PROTECT, related_name="checkpoints", verbose_name="Этап")
+    name = models.CharField("Критерий выполнения", max_length=300)
+    required = models.BooleanField("Обязательный", default=True)
+    position = models.PositiveIntegerField("Порядок")
+    completed_at = models.DateTimeField("Выполнен", null=True, blank=True)
+    completed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+", verbose_name="Кто выполнил")
+
+    class Meta:
+        ordering = ["position", "pk"]
+        constraints = [models.UniqueConstraint(fields=["step", "position"], name="unique_work_checkpoint_position")]
+
+
+class WorkCheckpointEvent(models.Model):
+    checkpoint = models.ForeignKey(WorkCheckpoint, on_delete=models.PROTECT, related_name="events", verbose_name="Критерий")
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+", verbose_name="Пользователь")
+    completed = models.BooleanField("Отметка выполнения")
+    created_at = models.DateTimeField("Время", auto_now_add=True)
 
 
 class TenderAnalysis(models.Model):

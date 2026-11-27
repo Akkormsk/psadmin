@@ -2,7 +2,8 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models import Prefetch
-from django.http import Http404
+from django.http import Http404, JsonResponse
+import json
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
@@ -10,7 +11,8 @@ from django.views.decorators.http import require_POST
 from tender_selection.models import Tender
 
 from .models import WorkBoard, WorkBoardCard, WorkBoardColumn
-from .workboards import add_column, create_board, create_task_card, create_tender_card, move_card
+from .workboards import (add_column, create_board, create_task_card, create_tender_card, move_card,
+                         task_progress, edit_task_work, create_task_from_plan)
 
 
 def _visible_boards(user):
@@ -54,11 +56,16 @@ def workboard_list(request):
             WorkBoardColumn.objects.filter(board=selected).prefetch_related(
                 Prefetch(
                     "cards",
-                    queryset=WorkBoardCard.objects.select_related("task", "tender").order_by("position", "pk"),
+                    queryset=WorkBoardCard.objects.select_related("task", "tender").prefetch_related("task__commercial_items__route_plans__steps__checkpoints").order_by("position", "pk"),
                     to_attr="visible_cards",
                 )
             )
         )
+
+    for column in columns:
+        for card in column.visible_cards:
+            if card.task_id:
+                card.progress = task_progress(card.task)
 
     return render(request, "tenders/workboards.html", {
         "boards": boards,
@@ -129,4 +136,53 @@ def workboard_card_move(request, card_id):
         move_card(card, column)
     except ValidationError as error:
         messages.error(request, _error_text(error))
+    if request.POST.get("from_task") == "1" and card.task_id:
+        return redirect("workboard_task_detail", card_id=card.pk)
     return _board_redirect(board)
+
+
+@login_required
+def workboard_task_detail(request, card_id):
+    card = get_object_or_404(WorkBoardCard.objects.select_related("task", "board", "column"), pk=card_id, task__isnull=False)
+    _board_for_user(request.user, card.board_id)
+    return render(request, "tenders/workboard_task.html", {
+        "card": card, "progress": task_progress(card.task), "columns": card.board.columns.all(),
+    })
+
+
+@login_required
+@require_POST
+def workboard_task_edit(request, card_id):
+    card = get_object_or_404(WorkBoardCard, pk=card_id, task__isnull=False)
+    _board_for_user(request.user, card.board_id)
+    try:
+        edit_task_work(card, request.user, request.POST.get("action"), request.POST)
+    except ValidationError as error:
+        messages.error(request, _error_text(error))
+    return redirect("workboard_task_detail", card_id=card.pk)
+
+
+@login_required
+@require_POST
+def workboard_task_import(request, board_id):
+    board = _board_for_user(request.user, board_id)
+    try:
+        if request.content_type == "application/json":
+            raw = request.body
+        elif request.FILES.get("plan_file"):
+            raw = request.FILES["plan_file"].read(256001)
+        else:
+            raw = request.POST.get("plan", "")
+        if len(raw) > 256000:
+            raise ValidationError("Файл задачи слишком большой.")
+        payload = json.loads(raw)
+        card = create_task_from_plan(board, request.user, payload)
+    except (ValueError, ValidationError) as error:
+        message = _error_text(error) if isinstance(error, ValidationError) else "Некорректный JSON."
+        if request.content_type == "application/json":
+            return JsonResponse({"error": message}, status=400)
+        messages.error(request, message)
+        return _board_redirect(board)
+    if request.content_type == "application/json":
+        return JsonResponse({"card_id": card.pk, "url": reverse("workboard_task_detail", args=[card.pk])}, status=201)
+    return redirect("workboard_task_detail", card_id=card.pk)
