@@ -84,6 +84,7 @@ def _source_row(source, lines, notice, *, component=False):
                             unit=source.unit, provenance={})
     row = _row(model, 'component' if component else 'good', _matching_line(lines, source_id=source.pk))
     row['key'] = ('component-source-' if component else 'source-') + str(source.pk)
+    row['source_ids'] = [source.pk]
     row['source_locked'] = not component and source.source_type != 'manual'
     row['source_label'] = 'Исходная позиция закупки' if row['source_locked'] else ('Добавлен вручную' if not component else '')
     quote = notification_quote_source(source)
@@ -106,6 +107,7 @@ def product_editor(tender):
         previous = _matching_line(lines, good=good, source_id=linked[0].pk if len(linked) == 1 else None)
         row = _row(good, 'good', previous)
         row['commercial_id'] = good.pk
+        row['source_ids'] = [source.pk for source in linked]
         row['source_locked'] = bool(linked) and any(source.source_type != 'manual' for source in linked)
         row['source_label'] = 'Исходная позиция закупки' if row['source_locked'] else 'Добавлен вручную'
         if row['nmck'] == '' and not good.provenance.get('card_edit') and len(linked) == 1:
@@ -123,6 +125,7 @@ def product_editor(tender):
                 previous = _matching_line(lines, component=component, source_id=component.source_item_id)
                 child = _row(component, 'component', previous)
                 child['parent_key'] = f'component-{component.parent_id}' if component.parent_id else None
+                child['source_ids'] = [component.source_item_id] if component.source_item_id else []
                 row['components'].append(child)
         rows.append(row)
     # Excluded working goods still own their source evidence.

@@ -735,7 +735,9 @@ def tender_detail(request, pk):
                     item["composition_question_id"] = question.pk
                     item["composition_options"] = list((question.possible_answers or {}).get("options", [])) if isinstance(question.possible_answers, dict) else []
     from .national_regime import annotation, source_item_status
-    for item in display_items:
+    for index, item in enumerate(display_items):
+        if not any(item.get(key) for key in ("commercial_id", "component_id", "source_id")):
+            item["product_edit_key"] = f"notice-{index}"
         if active_sources:
             source = next((source for source in active_sources if source.pk == item.get("source_id")), None)
             item["national_regime"] = source_item_status(source, card) if source else annotation()
@@ -895,6 +897,17 @@ def tender_detail(request, pk):
             editor_state = product_editor(tender)
         except ValueError as exc:
             editor_error = str(exc)
+    if editor_state:
+        edit_key_by_source = {}
+        for editor_item in editor_state["items"]:
+            for source_id in editor_item.get("source_ids", []):
+                edit_key_by_source[source_id] = editor_item["key"]
+            for component in editor_item.get("components", []):
+                for source_id in component.get("source_ids", []):
+                    edit_key_by_source[source_id] = component["key"]
+        for item in display_items:
+            if item.get("source_id") in edit_key_by_source:
+                item["product_edit_key"] = edit_key_by_source[item["source_id"]]
     response = render(request, "tender_selection/_analysis_result.html" if analysis_snapshot and request.GET.get("full_card") != "1" else "tender_selection/detail.html", {
         "tender": tender,
         "is_manual": is_manual,

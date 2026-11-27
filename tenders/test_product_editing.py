@@ -118,6 +118,21 @@ class ProductEditingTests(TestCase):
         self.assertIsNone(response.context['product_finance_totals']['purchase_total'])
         self.assertEqual(response.context['product_calculation']['input_status']['state'], 'current')
 
+    def test_notice_only_rows_are_connected_to_the_editor(self):
+        from django.urls import reverse
+        tender = Tender.objects.create(purchase_number='notice-ui', title='Извещение', notification_raw=notification([raw_item('Блокнот', '10')], []))
+        self.client.force_login(self.user)
+        response = self.client.get(reverse('tender_selection:detail', args=[tender.pk]), {'analysis_snapshot': '1', 'full_card': '1'}, secure=True)
+        self.assertContains(response, 'data-product-edit-key="notice-0"')
+
+    def test_document_source_rows_use_the_matching_commercial_editor_key(self):
+        from django.urls import reverse
+        self.source.source_type = 'document_extraction'
+        self.source.save(update_fields=['source_type'])
+        self.client.force_login(self.user)
+        response = self.client.get(reverse('tender_selection:detail', args=[self.tender.pk]), {'analysis_snapshot': '1', 'full_card': '1'}, secure=True)
+        self.assertContains(response, f'data-product-edit-key="good-{self.good.pk}"')
+
     def test_source_quantity_and_exclusion_need_explicit_confirmation(self):
         state = product_editor(self.tender)
         self.assertTrue(state['items'][0]['source_locked'])
