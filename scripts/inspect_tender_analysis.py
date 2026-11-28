@@ -708,6 +708,30 @@ def collect_report(number):
             'document_input_profile': document_input_profile(tender), 'card_route_check': inspect_card_routes(tender), 'pending_count': sum(row['changes'] for row in pending_changes), 'pending_no_change_count': sum(not row['changes'] for row in pending_changes), 'pending_review_summary': pending_changes, 'active_items': items}
 
 
+def saved_reading_response_shapes(tender):
+    from tenders.models import TenderComputeJob
+    report = []
+    for job in TenderComputeJob.objects.filter(tender=tender).order_by('-pk')[:10]:
+        for stage_name, stage in ((job.diagnostics or {}).get('stages') or {}).items():
+            if not stage_name.startswith('reading:') or not isinstance(stage, dict):
+                continue
+            rows = []
+            for row in stage.get('result') or []:
+                if not isinstance(row, dict):
+                    rows.append({'row_type': type(row).__name__})
+                    continue
+                facts = row.get('facts')
+                rows.append({
+                    'row_keys': sorted(row),
+                    'fact_keys': [sorted(fact) if isinstance(fact, dict) else [type(fact).__name__]
+                                  for fact in facts] if isinstance(facts, list) else None,
+                    'fact_count': len(facts) if isinstance(facts, list) else None,
+                })
+            report.append({'job_id': job.pk, 'stage': stage_name, 'state': stage.get('state'),
+                           'validation_error': stage.get('validation_error'), 'rows': rows})
+    return report
+
+
 def inspect_binding_request(tender):
     from unittest.mock import patch
     from tenders.models import TenderComputeJob
@@ -843,7 +867,8 @@ def main():
         print(json.dumps({'read_only': True, 'model_called': False, 'card_checks': reports,
                           'document_metadata': document_metadata, 'binding_replay': binding_replay,
                           'scout_experiment': scout_experiment, 'scout_candidates': scout_candidates,
-                          'original_document': original_document}, ensure_ascii=False), flush=True)
+                          'original_document': original_document,
+                          'reading_response_shapes': saved_reading_response_shapes(target)}, ensure_ascii=False), flush=True)
 
 
 
