@@ -548,7 +548,7 @@ class GatewayDocumentEnricher:
         return True
 
     def read_source_memory(self, job):
-        from .source_memory import VERSION, validate_reading, validate_extracted_facts, normalize_reading_scope, plan_packets, token_bound, RequestLimits
+        from .source_memory import VERSION, validate_reading, validate_extracted_facts, normalize_reading_scope, resolve_reading_rows, plan_packets, token_bound, RequestLimits
         memory = self._prepare_source_memory(job)
         inventory = memory.inventory
         legacy = TenderComputeJob.objects.filter(tender=job.tender, diagnostics__source_reading__version=VERSION).exclude(
@@ -642,21 +642,7 @@ class GatewayDocumentEnricher:
             attempted.update(block['id'] for block in batch)
             before = len(memory.records)
             def addressed(rows):
-                resolved = []
-                for row in rows:
-                    if not isinstance(row, dict) or not isinstance(row.get('ids', []), list):
-                        resolved.append(row)
-                        continue
-                    references = row.get('ids', [row.get('id')])
-                    for reference in references:
-                        identity = aliases.get(reference, reference) if isinstance(reference, str) else None
-                        record = {key: value for key, value in row.items() if key != 'ids'}
-                        record['id'] = identity
-                        block = memory.blocks.get(identity)
-                        if block is not None and not block.get('image_index'):
-                            record['facts'] = [] if row.get('scope') == 'irrelevant' else [{'quote': block['text']}]
-                        resolved.append(normalize_reading_scope(record, set(self.stage_sources)))
-                return resolved
+                return resolve_reading_rows(rows, aliases, memory.blocks, set(self.stage_sources))
             try:
                 rows, metrics = self.ask_stage(job, stage, instruction, {'source_index': page, 'blocks': reading_payload(batch)},
                     output_tokens=output_bound(batch))

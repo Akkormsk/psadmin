@@ -171,6 +171,21 @@ def normalize_reading_scope(row, source_ids):
     return row
 
 
+def resolve_reading_rows(rows, aliases, blocks, source_ids):
+    """One boundary for accepted AI address shapes and source-backed text evidence."""
+    resolved = []
+    for row in resolve_assignment_rows(rows, aliases):
+        if not isinstance(row, dict):
+            resolved.append(row)
+            continue
+        record = normalize_assignment({key: value for key, value in row.items() if key != 'ids'})
+        block = blocks.get(record.get('id'))
+        if block is not None and not block.get('image_index'):
+            record['facts'] = [] if record.get('scope') == 'irrelevant' else [{'quote': block['text']}]
+        resolved.append(normalize_reading_scope(record, source_ids))
+    return resolved
+
+
 def validate_reading(rows, blocks, source_ids):
     if not isinstance(rows, list):
         raise ValueError('Не получено состояние прочитанных фрагментов.')

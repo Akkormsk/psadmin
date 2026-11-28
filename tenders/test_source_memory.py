@@ -4,7 +4,7 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from tender_selection.models import DocumentPreview, Tender
 from .models import TenderComputeJob, TenderSourceItem
 from .calculation_v2_pipeline import GatewayDocumentEnricher
-from .source_memory import SourceMemory, document_blocks, packets, size, validate_reading, MAX_INPUT_BYTES
+from .source_memory import SourceMemory, document_blocks, packets, size, validate_reading, resolve_reading_rows, MAX_INPUT_BYTES
 
 
 class SourceMemoryTests(SimpleTestCase):
@@ -30,6 +30,26 @@ class SourceMemoryTests(SimpleTestCase):
             validate_reading([], [block], {1})
         with self.assertRaises(ValueError):
             validate_reading([{'id': 'a', 'scope': 'item', 'source_ids': [2]}], [block], {1})
+
+    def test_reading_boundary_normalizes_supported_shapes_and_preserves_visual_evidence(self):
+        blocks = {
+            'text': {'id': 'text', 'text': 'Точный исходный текст'},
+            'image': {'id': 'image', 'text': '', 'image_index': 1},
+        }
+        rows = resolve_reading_rows([
+            {'id': 't', 'scope': 'item', 'source_id': 1},
+            {'ids': ['i'], 'scope': 'unassigned', 'source_ids': [], 'reason': 'Связь неясна',
+             'facts': [{'quote': 'Текст с изображения'}]},
+        ], {'t': 'text', 'i': 'image'}, blocks, {1})
+        self.assertEqual(rows[0]['source_ids'], [1])
+        self.assertEqual(rows[0]['facts'], [{'quote': 'Точный исходный текст'}])
+        self.assertEqual(rows[1]['facts'], [{'quote': 'Текст с изображения'}])
+
+        malformed = resolve_reading_rows([
+            {'id': 't', 'ids': ['i'], 'scope': 'global', 'source_ids': []},
+        ], {'t': 'text', 'i': 'image'}, blocks, {1})
+        with self.assertRaisesRegex(ValueError, 'лишний или повторный фрагмент'):
+            validate_reading(malformed, [blocks['text']], {1})
 
 
 @override_settings(CALCULATION_V2_CONTEXT_LIMITS={'anthropic/claude-haiku-5-5': {'max_input_tokens': 12000, 'max_output_tokens': 8192}})
@@ -145,7 +165,7 @@ class SourceMemoryPipelineTests(TestCase):
         job = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
         def answer(prompt, **kwargs):
             task = json.loads(prompt.rsplit('\n', 1)[1])
-            return {'items': [{'id': block['id'], 'scope': 'item', 'source_ids': [self.source.pk],
+            return {'items': [{'id': block['id'], 'scope': 'item', 'source_id': self.source.pk,
                                'reason': 'Требование товара'} for block in task['blocks']]}, {}
         engine = self.engine()
         with patch('tenders.services._ai_gateway_json', side_effect=answer):
