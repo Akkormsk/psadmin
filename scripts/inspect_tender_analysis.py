@@ -646,6 +646,24 @@ def collect_report(number):
         } for entry in diagnostics.get('enrichment', []) if isinstance(entry, dict)]
         latest['rejections'] = [entry.get('extraction', {}).get('rejections', []) for entry in diagnostics.get('enrichment', []) if isinstance(entry, dict)]
         latest['enrichment_state'] = diagnostics.get('enrichment_state')
+        latest['reading_response_shapes'] = []
+        for stage_name, stage in (diagnostics.get('stages') or {}).items():
+            if not stage_name.startswith('reading:') or not isinstance(stage, dict):
+                continue
+            for row in stage.get('result') or []:
+                if not isinstance(row, dict):
+                    latest['reading_response_shapes'].append({'stage': stage_name, 'row_type': type(row).__name__})
+                    continue
+                facts = row.get('facts')
+                latest['reading_response_shapes'].append({
+                    'stage': stage_name,
+                    'state': stage.get('state'),
+                    'validation_error': stage.get('validation_error'),
+                    'row_keys': sorted(row),
+                    'fact_keys': [sorted(fact) if isinstance(fact, dict) else [type(fact).__name__]
+                                  for fact in facts] if isinstance(facts, list) else None,
+                    'fact_count': len(facts) if isinstance(facts, list) else None,
+                })
         if diagnostics.get('stages'):
             from tenders.calculation_v2_pipeline import GatewayDocumentEnricher, document_analysis_sources, assess_quality
             from unittest.mock import patch
