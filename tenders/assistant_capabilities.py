@@ -1,12 +1,16 @@
 """Published production knowledge capabilities using existing UI services."""
-from .assistant_tools import AssistantResource, AssistantTool, AssistantToolError, register_resource, register_tool
-from .models import CounterpartyKnowledgeVersion, Proposal
+from django.core.exceptions import ObjectDoesNotExist, PermissionDenied, ValidationError
+
+from .assistant_tools import AssistantResource, AssistantTool, AssistantToolError, register_capability_exclusion, register_resource, register_tool
+from .models import CounterpartyKnowledgeVersion, Proposal, WorkBoard, WorkBoardCard, WorkBoardColumn
 from tender_selection.models import Tender
 from .provider_knowledge import confirm_knowledge, confirm_sewing_price_list, create_counterparty_with_knowledge, remove_counterparty_knowledge
 from .provider_calculators import ProviderCalculatorError, calculate_provider_binding
 from .proposals import apply_batch
 from .production_actions import add_route_calculation_sources, confirm_proposed_stage, confirm_route_training, deactivate_lesson, deactivate_route_knowledge, confirm_counterparty_with_stages, draft_production_counterparty, draft_production_feedback, reopen_confirmed_route, restore_requirement_to_route, revise_route_build, save_manual_training_example, select_route_catalog_product, start_route_build
 from .estimate_actions import duplicate_estimate, delete_estimate, set_tender_estimate_status, set_order_estimate_status, persist_estimate, estimate_for_user, EstimateActionError
+from .workboards import add_column, create_board, create_task_card, create_task_from_plan, create_tender_card, delete_card, edit_task_work, move_card
+from .product_editing import save_manual_step, save_products
 
 
 register_resource(AssistantResource(
@@ -79,6 +83,205 @@ register_resource(AssistantResource(
     "Доступные контрагенты, приоритет и способ получения цены для этапов производства.",
     "tenders.StageCounterpartyLink", ("tenders",),
 ))
+register_resource(AssistantResource(
+    "tenders.workboards", "Доски",
+    "Рабочие доски и их владельцы.",
+    "tenders.WorkBoard", ("tenders",),
+))
+register_resource(AssistantResource(
+    "tenders.workboard_columns", "Колонки досок",
+    "Очередь, завершение и промежуточные колонки рабочих досок.",
+    "tenders.WorkBoardColumn", ("tenders",),
+))
+register_resource(AssistantResource(
+    "tenders.workboard_cards", "Карточки досок",
+    "Карточки задач и исполнения выигранных тендеров.",
+    "tenders.WorkBoardCard", ("tenders",),
+))
+register_resource(AssistantResource(
+    "tenders.tasks", "Задачи",
+    "Самостоятельные задачи с описанием, подзадачами, этапами и проверками.",
+    "tenders.Task", ("tenders",),
+))
+
+
+WORKBOARD_TASK_ACTIONS = (
+    ("edit_task", "Изменить задачу"), ("add_item", "Добавить подзадачу"),
+    ("edit_item", "Изменить подзадачу"), ("move_item", "Переместить подзадачу"),
+    ("delete_item", "Удалить подзадачу"), ("add_step", "Добавить этап"),
+    ("move_step", "Переместить этап"), ("delete_step", "Удалить этап"),
+    ("add_check", "Добавить проверку"), ("move_check", "Переместить проверку"),
+    ("delete_check", "Удалить проверку"), ("toggle_check", "Отметить проверку"),
+)
+
+
+def _workboard_error(error):
+    if isinstance(error, ValidationError):
+        return " ".join(error.messages)
+    return str(error) or "Операция с доской недоступна"
+
+
+def _board_for_user(user, board_id):
+    board = WorkBoard.objects.get(pk=board_id)
+    if not user.is_superuser and board.created_by_id != user.pk:
+        raise PermissionDenied("Нет доступа к этой доске")
+    return board
+
+
+def _card_for_user(user, card_id):
+    card = WorkBoardCard.objects.select_related("board").get(pk=card_id)
+    _board_for_user(user, card.board_id)
+    return card
+
+
+def _run_workboard(action):
+    try:
+        return action()
+    except (ObjectDoesNotExist, PermissionDenied, ValidationError, ValueError, TypeError) as error:
+        raise AssistantToolError(_workboard_error(error)) from error
+
+
+def assistant_create_board(user, payload):
+    board = _run_workboard(lambda: create_board(user, payload["name"]))
+    return {"board_id": board.pk}
+
+
+def assistant_add_column(user, payload):
+    column = _run_workboard(lambda: add_column(_board_for_user(user, payload["board_id"]), payload["name"]))
+    return {"column_id": column.pk, "board_id": column.board_id}
+
+
+def assistant_create_task(user, payload):
+    card = _run_workboard(lambda: create_task_card(
+        _board_for_user(user, payload["board_id"]),
+        name=payload["name"], description=payload.get("description", ""),
+    ))
+    return {"card_id": card.pk, "task_id": card.task_id, "board_id": card.board_id}
+
+
+def assistant_add_tender_card(user, payload):
+    def execute():
+        if not user.is_superuser:
+            raise PermissionDenied("Передавать тендеры в исполнение может только администратор")
+        tender = Tender.objects.get(pk=payload["tender_id"], outcome_status=Tender.OUTCOME_WON)
+        return create_tender_card(_board_for_user(user, payload["board_id"]), tender)
+    card = _run_workboard(execute)
+    return {"card_id": card.pk, "tender_id": card.tender_id, "board_id": card.board_id}
+
+
+def assistant_move_card(user, payload):
+    def execute():
+        card = _card_for_user(user, payload["card_id"])
+        column = WorkBoardColumn.objects.get(pk=payload["column_id"], board_id=card.board_id)
+        return move_card(card, column)
+    card = _run_workboard(execute)
+    return {"card_id": card.pk, "column_id": card.column_id}
+
+
+def assistant_edit_task(user, payload):
+    data = {key: value for key, value in payload.items() if key not in {"card_id", "action"}}
+    card = _run_workboard(lambda: edit_task_work(
+        _card_for_user(user, payload["card_id"]), user, payload["action"], data,
+    ))
+    return {"card_id": card.pk, "task_id": card.task_id, "action": payload["action"]}
+
+
+def assistant_import_task(user, payload):
+    card = _run_workboard(lambda: create_task_from_plan(
+        _board_for_user(user, payload["board_id"]), user, payload["plan"],
+    ))
+    return {"card_id": card.pk, "task_id": card.task_id, "board_id": card.board_id}
+
+
+def assistant_delete_card(user, payload):
+    card = _card_for_user(user, payload["card_id"])
+    result = {"card_id": card.pk, "board_id": card.board_id, "task_id": card.task_id, "tender_id": card.tender_id}
+    _run_workboard(lambda: delete_card(card, user))
+    return result
+
+
+register_tool(AssistantTool(
+    "workboard.create", "Создать рабочую доску", "Создаёт доску с колонками очереди и завершения.",
+    {"name": {"type": "string", "required": True, "label": "Название доски"}},
+    False, True, False, assistant_create_board, source="tenders.workboards.create_board",
+))
+register_tool(AssistantTool(
+    "workboard.column_add", "Добавить колонку доски", "Добавляет промежуточную колонку перед завершением.",
+    {"board_id": {"type": "integer", "required": True, "reference": {"model": "tenders.WorkBoard", "label": "name"}}, "name": {"type": "string", "required": True, "label": "Название колонки"}},
+    False, True, False, assistant_add_column, source="tenders.workboards.add_column",
+))
+register_tool(AssistantTool(
+    "workboard.task_create", "Создать задачу на доске", "Создаёт простую задачу в очереди выбранной доски.",
+    {"board_id": {"type": "integer", "required": True, "reference": {"model": "tenders.WorkBoard", "label": "name"}}, "name": {"type": "string", "required": True, "label": "Название задачи"}, "description": "string?"},
+    False, True, False, assistant_create_task, source="tenders.workboards.create_task_card",
+))
+register_tool(AssistantTool(
+    "workboard.tender_add", "Передать выигранный тендер на доску", "Создаёт одну карточку исполнения выигранного тендера.",
+    {"board_id": {"type": "integer", "required": True, "reference": {"model": "tenders.WorkBoard", "label": "name"}}, "tender_id": {"type": "integer", "required": True, "reference": {"model": "tender_selection.Tender", "label": ["purchase_number", "title"]}}},
+    False, True, True, assistant_add_tender_card, source="tenders.workboards.create_tender_card",
+))
+register_tool(AssistantTool(
+    "workboard.card_move", "Переместить карточку", "Перемещает карточку в другую колонку той же доски.",
+    {"card_id": {"type": "integer", "required": True, "reference": {"model": "tenders.WorkBoardCard", "label": ["task", "tender"]}}, "column_id": {"type": "integer", "required": True, "reference": {"model": "tenders.WorkBoardColumn", "label": "name"}}},
+    False, True, False, assistant_move_card, source="tenders.workboards.move_card",
+))
+register_tool(AssistantTool(
+    "workboard.task_edit", "Изменить состав и выполнение задачи", "Изменяет задачу, подзадачи, этапы или проверки через общий исполнитель карточки.",
+    {"card_id": {"type": "integer", "required": True, "reference": {"model": "tenders.WorkBoardCard", "label": ["task", "tender"]}}, "action": {"type": "string", "required": True, "label": "Действие", "choices": WORKBOARD_TASK_ACTIONS}, "name": "string?", "description": "string?", "item_id": "integer?", "step_id": "integer?", "checkpoint_id": "integer?", "direction": "string?", "criterion": "string?", "required": "boolean?", "completed": "boolean?"},
+    False, True, False, assistant_edit_task, source="tenders.workboards.edit_task_work",
+))
+register_tool(AssistantTool(
+    "workboard.task_import", "Создать задачу по готовому плану", "Идемпотентно создаёт задачу с подзадачами, этапами и обязательными проверками.",
+    {"board_id": {"type": "integer", "required": True, "reference": {"model": "tenders.WorkBoard", "label": "name"}}, "plan": {"type": "object", "required": True, "label": "План задачи"}},
+    False, True, False, assistant_import_task, source="tenders.workboards.create_task_from_plan",
+))
+register_tool(AssistantTool(
+    "workboard.card_delete", "Удалить карточку доски", "Удаляет задачу целиком или снимает карточку исполнения тендера с доски.",
+    {"card_id": {"type": "integer", "required": True, "reference": {"model": "tenders.WorkBoardCard", "label": ["task", "tender"]}}},
+    False, True, False, assistant_delete_card, source="tenders.workboards.delete_card",
+))
+
+
+def assistant_save_products(user, payload):
+    try:
+        return save_products(user, payload["tender_id"], payload["state"], route_only=True)
+    except (ObjectDoesNotExist, PermissionDenied, ValidationError, ValueError, TypeError) as error:
+        raise AssistantToolError(_workboard_error(error)) from error
+
+
+def assistant_save_manual_step(user, payload):
+    try:
+        result = save_manual_step(
+            user, payload["tender_id"], payload["source_id"], payload["plan_id"],
+            payload["step_id"], payload["mode"], payload.get("amount"),
+        )
+        return {"saved": True, "result": result}
+    except (ObjectDoesNotExist, PermissionDenied, ValidationError, ValueError, TypeError) as error:
+        raise AssistantToolError(_workboard_error(error)) from error
+
+
+register_tool(AssistantTool(
+    "tender.products_save", "Сохранить рабочий состав товаров",
+    "Сохраняет проверенный состав, количество, компоненты и маршрутные основания по той же ревизии, что редактор карточки тендера.",
+    {"tender_id": {"type": "integer", "required": True, "reference": {"model": "tender_selection.Tender", "label": ["purchase_number", "title"]}}, "state": {"type": "object", "required": True, "label": "Проверенное состояние редактора товаров"}},
+    False, True, True, assistant_save_products, source="tenders.product_editing.save_products",
+))
+register_tool(AssistantTool(
+    "tender.manual_step_price_save", "Сохранить ручную цену этапа",
+    "Сохраняет или очищает цену одного этапа согласованного маршрута и пересчитывает стоимость позиции.",
+    {"tender_id": {"type": "integer", "required": True, "reference": {"model": "tender_selection.Tender", "label": ["purchase_number", "title"]}}, "source_id": "integer", "plan_id": "integer", "step_id": "integer", "mode": {"type": "string", "required": True, "label": "Способ ввода", "choices": (("unit", "За единицу"), ("total", "За тираж"))}, "amount": "number?"},
+    False, True, True, assistant_save_manual_step, source="tenders.product_editing.save_manual_step",
+))
+
+
+register_capability_exclusion("tenders.production_actions.activate_cascade_lab_settings", "Internal cascade laboratory settings are not a user business operation.")
+register_capability_exclusion("tenders.cascade_lab.execute_cascade_steps", "Internal paid cascade laboratory runs remain outside assistant tools.")
+register_capability_exclusion("tenders.gateway_budget.available_models", "Model inventory is an internal dependency of the cascade laboratory.")
+register_capability_exclusion("tenders.production_actions.save_cascade_lab_preset", "Internal cascade laboratory presets are not a user business operation.")
+register_capability_exclusion("tenders.services.recognize_tender_items", "Legacy binary upload analysis is replaced by the saved tender document workflow.")
+register_capability_exclusion("tenders.services.inspect_tender_document", "Legacy binary upload inspection is replaced by the saved tender document workflow.")
+register_capability_exclusion("tenders.services.detect_tender_document_type", "Legacy binary upload detection is an internal step of document analysis.")
+register_capability_exclusion("tenders.services.analyze_tender_requirements", "Legacy binary requirement analysis is replaced by the saved tender document workflow.")
 
 
 def confirm_provider_knowledge(user, payload):

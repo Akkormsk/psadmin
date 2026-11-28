@@ -1,6 +1,9 @@
 """Published descriptions of existing cash actions."""
-from tenders.assistant_tools import AssistantResource, AssistantTool, AssistantToolError, register_resource, register_tool
+from tenders.assistant_tools import AssistantResource, AssistantTool, AssistantToolError, register_capability_exclusion, register_resource, register_tool
 from . import actions
+
+
+register_capability_exclusion("cash.modulbank.upsert_operation", "Signed bank webhook ingestion is an external system operation.")
 
 
 def _call(method, *keys):

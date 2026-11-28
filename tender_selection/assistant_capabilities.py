@@ -1,5 +1,5 @@
 """Published references to tender-selection executors shared with the site."""
-from tenders.assistant_tools import AssistantResource, AssistantTool, AssistantToolError, register_resource, register_tool
+from tenders.assistant_tools import AssistantResource, AssistantTool, AssistantToolError, register_capability_exclusion, register_resource, register_tool
 
 from .models import Tender
 from .primary_search import assistant_primary_argument
@@ -11,6 +11,11 @@ from .services import (
     restore_hidden_tender, save_evaluation_settings, save_selection_settings, save_tender_bid,
     update_tender_review, refresh_document_analysis, decide_all_document_proposals, import_tender_by_number, source_route_for, tender_refresh_status_for, intake_readiness_for,
 )
+
+
+register_capability_exclusion("tender_selection.services.upload_tender_document_preview", "Binary browser upload is handled through saved documents and assistant attachments.")
+register_capability_exclusion("tender_selection.services.run_profile_triage", "Bulk paid profile triage remains an explicit administrator workflow.")
+register_capability_exclusion("tender_selection.services.pull_tenders_now", "External source synchronization is a background technical operation.")
 
 
 register_resource(AssistantResource(

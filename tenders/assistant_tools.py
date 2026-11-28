@@ -58,6 +58,7 @@ class AssistantResource:
 
 _TOOLS: dict[str, AssistantTool] = {}
 _RESOURCES: dict[str, AssistantResource] = {}
+_CAPABILITY_EXCLUSIONS: dict[str, str] = {}
 _DISCOVERED = False
 _MODEL_HIDDEN_TOOLS = {"assistant.capabilities", "assistant.catalog"}
 
@@ -96,6 +97,22 @@ def register_resource(resource: AssistantResource) -> AssistantResource:
         raise RuntimeError("Assistant resource must belong to a business area")
     _RESOURCES[resource.identifier] = resource
     return resource
+
+
+def register_capability_exclusion(source: str, reason: str) -> None:
+    """Record why a user operation must not be exposed to the assistant."""
+    source = str(source or "").strip()
+    reason = str(reason or "").strip()
+    if not source or not reason:
+        raise RuntimeError("Assistant capability exclusion requires source and reason")
+    if source in _CAPABILITY_EXCLUSIONS:
+        raise RuntimeError(f"Duplicate assistant capability exclusion: {source}")
+    _CAPABILITY_EXCLUSIONS[source] = reason
+
+
+def available_capability_exclusions() -> dict[str, str]:
+    _discover_app_actions()
+    return dict(_CAPABILITY_EXCLUSIONS)
 
 
 def _tool_areas(tool: AssistantTool) -> tuple[str, ...]:
@@ -698,6 +715,14 @@ def capability_issues(user) -> list[dict[str, str]]:
             continue
         if not callable(source):
             issues.append({"id": tool.identifier, "issue": "not_callable", "source": tool.source})
+    for source_path in _CAPABILITY_EXCLUSIONS:
+        try:
+            source = import_string(source_path)
+        except (ImportError, AttributeError, ValueError):
+            issues.append({"id": source_path, "issue": "missing_excluded_executor", "source": source_path})
+            continue
+        if not callable(source):
+            issues.append({"id": source_path, "issue": "excluded_executor_not_callable", "source": source_path})
     return issues
 
 

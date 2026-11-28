@@ -1,5 +1,8 @@
 # PSADMIN: Project Contract
 
+## 0. Documentation Style
+- **Consistency:** Match the surrounding language, structure, and brevity when editing documentation. Write new rules in this contract in concise English.
+
 ## 1. Environments & Core Invariants
 - **Sources of Truth:** GitHub for code; Timeweb PostgreSQL for operational data. Never commit secrets, dumps, or client/supplier exports.
 - **Safety Gates:** Work only in `feature/*` branches and TEST. Never touch PROD, prod flags, destructive migrations, deploy, or mass AI/backfill without explicit owner approval (silence is not consent).
@@ -21,9 +24,10 @@
 ## 4. Assistant Capabilities (M3.1 / M3.2)
 - **Shared Executors:** Put HTTP/JS/write logic in a shared backend executor for Web and Telegram (no Telegram-specific business logic, no assistant-only helpers). Require permissions, preview/confirmation, idempotency, and audit.
 - **Scope:** M3.1 = one macro-operation with one final confirmation. Multiple independent READ/ACTION = M3.2. Test every published `source` and unified executor before marking `TEST_VERIFIED`.
-## GitHub Issues — единственный реестр подтверждённых ошибок
+- **Library Completeness:** Every user-facing feature branch must pass the generic assistant coverage audit before completion, merge, or TEST deploy. The audit must compare the branch with `origin/test-server`, discover new or changed user operations without feature-specific lists, and require each operation to resolve to an existing READ/ACTION declaration or an explicit reasoned exclusion. Use shared UI executors and verify actual discovery and execution. Treat missing coverage as incomplete branch work, never as owner follow-up.
 
-- Перед регистрацией исследовать сохранённую диагностику/логи, определить конкретную техническую причину, подтвердить воспроизведение или доказательство отказа. Симптом «не прочитался», предположение, общий статус partial/failed и сам факт неудачного workflow недостаточны. Не создавать Issue до установления причины. Не создавать параллельные реестры и модули.
-- Искать совпадения среди открытых и закрытых Issues по механизму ошибки, а не по тендеру, сообщению пользователя или номеру задания. Один стабильный ключ на одну причину (домен/компонент/код отказа); не включать номер тендера, дату, SHA или ID запуска в ключ. Использовать только общий scripts/issue_memory.py через сериализованный workflow регистрации; не создавать Issues вручную/API в обход проверки. Повторный подтверждённый случай увеличивает счётчик; повторная запись того же идентификатора события ничего не меняет. Возврат исправленной ошибки открывает прежний Issue.
-- Обязательные данные: техническая причина и этап, сценарий, ожидаемое и фактическое поведение, полный SHA, ссылка на доказательство, стабильный ID случая, точечный автоматический сценарий воспроизведения (или явно manual, если автоматизация пока невозможна). Не публиковать секреты и сырые документы. Неподтверждённые случаи остаются в штатной диагностике источника до исследования.
-- После каждого успешного деплоя проверять все открытые подтверждённые ошибки по их сохранённым регрессиям, не запускать платные вызовы. Закрывать только при PASS конкретного ранее воспроизведённого сценария на проверенной версии; визуальная приёмка и отсутствие проверяемого сценария оставляют Issue открытым. Успех deploy/health или общего CI сам по себе не доказательство исправления. Не закрывать production-дефект по TEST; учитывать область подтверждения.
+## 5. GitHub Issues
+- **Single Registry:** GitHub Issues is the only registry for confirmed defects. Diagnose the technical cause and prove the failure before registration; keep unconfirmed cases in normal source diagnostics.
+- **Stable Identity:** Match open and closed issues by failure mechanism. Register only through serialized `scripts/issue_memory.py`; duplicate events are idempotent, repeated cases increase the count, and recurrence reopens the original issue.
+- **Required Evidence:** Record the cause and stage, scenario, expected and actual behavior, full SHA, evidence link, stable case ID, and a targeted regression or explicit manual status. Never publish secrets or raw business documents.
+- **Closure:** After each successful deploy, run saved regressions for open confirmed defects without paid calls. Close only after the exact case passes on the affected environment; deploy health, general CI, or TEST evidence for a PROD defect is insufficient.

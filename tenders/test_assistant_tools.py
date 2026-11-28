@@ -172,7 +172,7 @@ class AssistantToolRegistryTests(TestCase):
             "cash": {"cash.bank_payments", "cash.reconciliations", "cash.transactions"},
             "finance": {"finance.kpi_rates", "finance.kpi_tiers", "finance.manager_settings", "finance.operating_expenses", "finance.payroll_lines", "finance.period_expenses", "finance.periods"},
             "payroll": {"finance.kpi_rates", "finance.kpi_tiers", "finance.manager_settings", "finance.payroll_lines", "payroll.order_records"},
-            "tenders": {"tenders.catalog_categories", "tenders.catalog_products", "tenders.catalog_suppliers", "tenders.counterparties", "tenders.lessons", "tenders.order_estimates", "tenders.order_lines", "tenders.orders", "tenders.production_stages", "tenders.production_types", "tenders.settings", "tenders.stage_counterparties", "tenders.tender_estimates", "tenders.tender_lines"},
+            "tenders": {"tenders.catalog_categories", "tenders.catalog_products", "tenders.catalog_suppliers", "tenders.counterparties", "tenders.lessons", "tenders.order_estimates", "tenders.order_lines", "tenders.orders", "tenders.production_stages", "tenders.production_types", "tenders.settings", "tenders.stage_counterparties", "tenders.tasks", "tenders.tender_estimates", "tenders.tender_lines", "tenders.workboard_cards", "tenders.workboard_columns", "tenders.workboards"},
             "tender_selection": {"tender_selection.contract_statistics", "tender_selection.customers", "tender_selection.filter_settings", "tender_selection.tenders"},
         }
         for area_id, identifiers in expected_resources.items():

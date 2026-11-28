@@ -1,0 +1,44 @@
+name: Assistant library coverage
+
+on:
+  push:
+    branches:
+      - "feature/**"
+  pull_request:
+    branches:
+      - test-server
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      DJANGO_SECRET_KEY: ci-only
+      DB_ENGINE: sqlite
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - run: python -m pip install -r requirements.txt
+
+      - name: Fetch TEST baseline
+        run: git fetch --no-tags origin test-server:refs/remotes/origin/test-server
+
+      - name: Audit new and changed user operations
+        run: |
+          python manage.py audit_assistant_capabilities --coverage --base-ref origin/test-server --strict
+          python manage.py audit_assistant_capabilities --coverage --strict
+
+      - name: Verify the coverage detector
+        run: python manage.py test tenders.test_assistant_coverage --noinput -v 1

@@ -153,6 +153,30 @@ jobs:
           printf 'sha=%s\n' "$deploy_sha" >> "$GITHUB_OUTPUT"
           git archive --format=tar "$deploy_sha" | gzip -9 > psadmin-test.tar.gz
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install audit dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Block uncovered assistant operations
+        shell: bash
+        env:
+          DJANGO_SECRET_KEY: ci-only
+          DB_ENGINE: sqlite
+          PUSH_BASE_SHA: ${{ github.event.before || '' }}
+        run: |
+          set -euo pipefail
+          base_ref="$PUSH_BASE_SHA"
+          if [ "${{ github.event_name }}" != "push" ] || [ -z "$base_ref" ] || [ "$base_ref" = "0000000000000000000000000000000000000000" ]; then
+            base_ref="HEAD^"
+          fi
+          python manage.py audit_assistant_capabilities --coverage --base-ref "$base_ref" --strict
+          python manage.py audit_assistant_capabilities --coverage --strict
+
       - name: Configure strict SSH
         shell: bash
         env:
