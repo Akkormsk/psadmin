@@ -653,7 +653,7 @@ class GatewayDocumentEnricher:
                         record = {key: value for key, value in row.items() if key != 'ids'}
                         record['id'] = identity
                         block = memory.blocks.get(identity)
-                        if 'ids' in row and block is not None and not block.get('image_index'):
+                        if block is not None and not block.get('image_index'):
                             record['facts'] = [] if row.get('scope') == 'irrelevant' else [{'quote': block['text']}]
                         resolved.append(normalize_reading_scope(record, set(self.stage_sources)))
                 return resolved

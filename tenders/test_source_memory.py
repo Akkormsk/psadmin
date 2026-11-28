@@ -141,6 +141,19 @@ class SourceMemoryPipelineTests(TestCase):
         for row in engine.source_memory.snapshot()['records'].values():
             self.assertEqual(row['facts'], [{'quote': engine.source_memory.blocks[row['id']]['text']}])
 
+    def test_single_reference_attaches_exact_original_without_model_copying_text(self):
+        job = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
+        def answer(prompt, **kwargs):
+            task = json.loads(prompt.rsplit('\n', 1)[1])
+            return {'items': [{'id': block['id'], 'scope': 'item', 'source_ids': [self.source.pk],
+                               'reason': 'Требование товара'} for block in task['blocks']]}, {}
+        engine = self.engine()
+        with patch('tenders.services._ai_gateway_json', side_effect=answer):
+            engine.read_source_memory(job)
+        self.assertTrue(job.diagnostics['source_reading']['complete'])
+        for row in engine.source_memory.snapshot()['records'].values():
+            self.assertEqual(row['facts'], [{'quote': engine.source_memory.blocks[row['id']]['text']}])
+
     def test_partial_reading_continues_without_repeating_confirmed_sources(self):
         job = TenderComputeJob.objects.create(tender=self.tender, diagnostics={'refresh': {}})
         confirmed = set()
